@@ -469,13 +469,14 @@ static void
 vdev_queue_agg_io_done(zio_t *aio)
 {
 	vdev_queue_t *vq = &aio->io_vd->vdev_queue;
-	vdev_io_t *vi = aio->io_data;
+	vdev_io_t *vi = ABD_TO_BUF(aio->io_data);
 
 	if (aio->io_type == ZIO_TYPE_READ) {
 		zio_t *pio;
 		while ((pio = zio_walk_parents(aio)) != NULL) {
-			bcopy((char *)aio->io_data + (pio->io_offset -
-			    aio->io_offset), pio->io_data, pio->io_size);
+			abd_copy_from_buf(pio->io_data,
+			    ABD_TO_BUF(aio->io_data) +
+			    (pio->io_offset - aio->io_offset), pio->io_size);
 		}
 	}
 
@@ -628,7 +629,7 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 	ASSERT3U(size, <=, zfs_vdev_aggregation_limit);
 
 	aio = zio_vdev_delegated_io(first->io_vd, first->io_offset,
-	    vi, size, first->io_type, zio->io_priority,
+	    BUF_TO_ABD(vi), size, first->io_type, zio->io_priority,
 	    flags | ZIO_FLAG_DONT_CACHE | ZIO_FLAG_DONT_QUEUE,
 	    vdev_queue_agg_io_done, NULL);
 	aio->io_timestamp = first->io_timestamp;
@@ -641,12 +642,12 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 
 		if (dio->io_flags & ZIO_FLAG_NODATA) {
 			ASSERT3U(dio->io_type, ==, ZIO_TYPE_WRITE);
-			bzero((char *)aio->io_data + (dio->io_offset -
+			bzero(ABD_TO_BUF(aio->io_data) + (dio->io_offset -
 			    aio->io_offset), dio->io_size);
 		} else if (dio->io_type == ZIO_TYPE_WRITE) {
-			bcopy(dio->io_data, (char *)aio->io_data +
+			abd_copy_to_buf(ABD_TO_BUF(aio->io_data) +
 			    (dio->io_offset - aio->io_offset),
-			    dio->io_size);
+			    dio->io_data, dio->io_size);
 		}
 
 		zio_add_child(dio, aio);

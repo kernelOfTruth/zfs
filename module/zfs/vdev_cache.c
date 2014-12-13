@@ -206,7 +206,8 @@ vdev_cache_hit(vdev_cache_t *vc, vdev_cache_entry_t *ve, zio_t *zio)
 	}
 
 	ve->ve_hits++;
-	bcopy(ve->ve_data + cache_phase, zio->io_data, zio->io_size);
+	abd_copy_from_buf(zio->io_data, ve->ve_data + cache_phase,
+	    zio->io_size);
 }
 
 /*
@@ -229,7 +230,7 @@ vdev_cache_fill(zio_t *fio)
 
 	ASSERT(ve->ve_fill_io == fio);
 	ASSERT(ve->ve_offset == fio->io_offset);
-	ASSERT(ve->ve_data == fio->io_data);
+	ASSERT(ve->ve_data == ABD_TO_BUF(fio->io_data));
 
 	ve->ve_fill_io = NULL;
 
@@ -312,7 +313,7 @@ vdev_cache_read(zio_t *zio)
 	}
 
 	fio = zio_vdev_delegated_io(zio->io_vd, cache_offset,
-	    ve->ve_data, VCBS, ZIO_TYPE_READ, ZIO_PRIORITY_NOW,
+	    BUF_TO_ABD(ve->ve_data), VCBS, ZIO_TYPE_READ, ZIO_PRIORITY_NOW,
 	    ZIO_FLAG_DONT_CACHE, vdev_cache_fill, ve);
 
 	ve->ve_fill_io = fio;
@@ -357,8 +358,8 @@ vdev_cache_write(zio_t *zio)
 		if (ve->ve_fill_io != NULL) {
 			ve->ve_missed_update = 1;
 		} else {
-			bcopy((char *)zio->io_data + start - io_start,
-			    ve->ve_data + start - ve->ve_offset, end - start);
+			abd_copy_to_buf_off(ve->ve_data + start - ve->ve_offset,
+			    zio->io_data, end - start, start - io_start);
 		}
 		ve = AVL_NEXT(&vc->vc_offset_tree, ve);
 	}
