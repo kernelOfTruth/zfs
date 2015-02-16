@@ -43,15 +43,12 @@
  *
  * 	zfs_is_shared_nfs()
  * 	zfs_is_shared_smb()
- * 	zfs_is_shared_iscsi()
  * 	zfs_share_proto()
  * 	zfs_shareall();
  * 	zfs_unshare_nfs()
  * 	zfs_unshare_smb()
- * 	zfs_unshare_iscsi()
  * 	zfs_unshareall_nfs()
  *	zfs_unshareall_smb()
- *	zfs_unshareall_iscsi()
  *	zfs_unshareall()
  *	zfs_unshareall_bypath()
  *
@@ -102,8 +99,6 @@ typedef struct {
 proto_table_t proto_table[PROTO_END] = {
 	{ZFS_PROP_SHARENFS, "nfs", EZFS_SHARENFSFAILED, EZFS_UNSHARENFSFAILED},
 	{ZFS_PROP_SHARESMB, "smb", EZFS_SHARESMBFAILED, EZFS_UNSHARESMBFAILED},
-	{ZFS_PROP_SHAREISCSI, "iscsi", EZFS_SHAREISCSIFAILED,
-	    EZFS_UNSHAREISCSIFAILED},
 };
 
 zfs_share_proto_t nfs_only[] = {
@@ -115,15 +110,9 @@ zfs_share_proto_t smb_only[] = {
 	PROTO_SMB,
 	PROTO_END
 };
-
-zfs_share_proto_t iscsi_only[] = {
-	PROTO_ISCSI,
-	PROTO_END
-};
 zfs_share_proto_t share_all_proto[] = {
 	PROTO_NFS,
 	PROTO_SMB,
-	PROTO_ISCSI,
 	PROTO_END
 };
 
@@ -143,6 +132,7 @@ is_shared(libzfs_handle_t *hdl, const char *mountpoint, zfs_share_proto_t proto)
 	(void) fseek(hdl->libzfs_sharetab, 0, SEEK_SET);
 
 	while (fgets(buf, sizeof (buf), hdl->libzfs_sharetab) != NULL) {
+
 		/* the mountpoint is the first entry on each line */
 		if ((tab = strchr(buf, '\t')) == NULL)
 			continue;
@@ -161,14 +151,12 @@ is_shared(libzfs_handle_t *hdl, const char *mountpoint, zfs_share_proto_t proto)
 				continue;
 			*tab = '\0';
 			if (strcmp(ptr,
-				    proto_table[proto].p_name) == 0) {
+			    proto_table[proto].p_name) == 0) {
 				switch (proto) {
 				case PROTO_NFS:
 					return (SHARED_NFS);
 				case PROTO_SMB:
 					return (SHARED_SMB);
-				case PROTO_ISCSI:
-					return (SHARED_ISCSI);
 				default:
 					return (0);
 				}
@@ -538,21 +526,15 @@ zfs_unmount(zfs_handle_t *zhp, const char *mountpoint, int flags)
 	char *mntpt = NULL;
 
 	/* check to see if we need to unmount the filesystem */
-	if ((mountpoint != NULL ||
-	    ((zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM) &&
-	    libzfs_mnttab_find(hdl, zhp->zfs_name, &entry) == 0)) ||
-	    zfs_get_type(zhp) == ZFS_TYPE_VOLUME) {
+	if (mountpoint != NULL || ((zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM) &&
+	    libzfs_mnttab_find(hdl, zhp->zfs_name, &entry) == 0)) {
 		/*
 		 * mountpoint may have come from a call to
 		 * getmnt/getmntany if it isn't NULL. If it is NULL,
 		 * we know it comes from libzfs_mnttab_find which can
 		 * then get freed later. We strdup it to play it safe.
 		 */
-		if (ZFS_IS_VOLUME(zhp)) {
-			if (asprintf(&mntpt, "%s/%s/%s", ZVOL_DIR, ZVOL_DRIVER,
-				    zfs_get_name(zhp)) < 0)
-				return (SHARED_NOT_SHARED);
-		} else if (mountpoint == NULL)
+		if (mountpoint == NULL)
 			mntpt = zfs_strdup(hdl, entry.mnt_mountp);
 		else
 			mntpt = zfs_strdup(hdl, mountpoint);
@@ -560,22 +542,10 @@ zfs_unmount(zfs_handle_t *zhp, const char *mountpoint, int flags)
 		/*
 		 * Unshare and unmount the filesystem
 		 */
-		zfs_share_proto_t *curr_proto;
-		for (curr_proto = share_all_proto; *curr_proto != PROTO_END;
-			curr_proto++) {
-			if (is_shared(hdl, mntpt, *curr_proto)) {
-				if (zfs_unshare_proto(zhp, mntpt, curr_proto)
-				    != 0) {
-					break;
-				} else {
-					/* STGT needs a little more time */
-					(void) usleep(500000);
-				}
-			}
-		}
+		if (zfs_unshare_proto(zhp, mntpt, share_all_proto) != 0)
+			return (-1);
 
-		if (zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM &&
-		    unmount_one(hdl, mntpt, flags) != 0) {
+		if (unmount_one(hdl, mntpt, flags) != 0) {
 			free(mntpt);
 			(void) zfs_shareall(zhp);
 			return (-1);
@@ -614,6 +584,9 @@ zfs_is_shared(zfs_handle_t *zhp)
 	zfs_share_type_t rc = 0;
 	zfs_share_proto_t *curr_proto;
 
+	if (ZFS_IS_VOLUME(zhp))
+		return (B_FALSE);
+
 	for (curr_proto = share_all_proto; *curr_proto != PROTO_END;
 	    curr_proto++)
 		rc |= zfs_is_shared_proto(zhp, NULL, *curr_proto);
@@ -624,12 +597,14 @@ zfs_is_shared(zfs_handle_t *zhp)
 int
 zfs_share(zfs_handle_t *zhp)
 {
+	assert(!ZFS_IS_VOLUME(zhp));
 	return (zfs_share_proto(zhp, share_all_proto));
 }
 
 int
 zfs_unshare(zfs_handle_t *zhp)
 {
+	assert(!ZFS_IS_VOLUME(zhp));
 	return (zfs_unshareall(zhp));
 }
 
@@ -642,12 +617,7 @@ zfs_is_shared_proto(zfs_handle_t *zhp, char **where, zfs_share_proto_t proto)
 	char *mountpoint;
 	zfs_share_type_t rc;
 
-	if (ZFS_IS_VOLUME(zhp)) {
-		if (asprintf(&mountpoint, "%s/%s/%s",
-			    ZVOL_DIR, ZVOL_DRIVER,
-			    zfs_get_name(zhp)) < 0)
-			return (SHARED_NOT_SHARED);
-	} else if (!zfs_is_mounted(zhp, &mountpoint))
+	if (!zfs_is_mounted(zhp, &mountpoint))
 		return (SHARED_NOT_SHARED);
 
 	if ((rc = is_shared(zhp->zfs_hdl, mountpoint, proto))) {
@@ -674,13 +644,6 @@ zfs_is_shared_smb(zfs_handle_t *zhp, char **where)
 {
 	return (zfs_is_shared_proto(zhp, where,
 	    PROTO_SMB) != SHARED_NOT_SHARED);
-}
-
-boolean_t
-zfs_is_shared_iscsi(zfs_handle_t *zhp, char **where)
-{
-	return (zfs_is_shared_proto(zhp, where,
-	    PROTO_ISCSI) != SHARED_NOT_SHARED);
 }
 
 /*
@@ -751,8 +714,8 @@ zfs_parse_options(char *options, zfs_share_proto_t proto)
 
 /*
  * Share the given filesystem according to the options in the specified
- * protocol specific properties (sharenfs, sharesmb, shareiscsi).  We rely
- * on "libshare" to the dirty work for us.
+ * protocol specific properties (sharenfs, sharesmb).  We rely
+ * on "libshare" to do the dirty work for us.
  */
 static int
 zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
@@ -766,10 +729,7 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 	zprop_source_t sourcetype;
 	int ret;
 
-	if (ZFS_IS_VOLUME(zhp))
-		snprintf(mountpoint, sizeof (mountpoint), "%s/%s/%s",
-			    ZVOL_DIR, ZVOL_DRIVER, zfs_get_name(zhp));
-	else if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
+	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
 		return (0);
 
 	if ((ret = zfs_init_libshare(hdl, SA_INIT_SHARE_API)) != SA_OK) {
@@ -860,12 +820,6 @@ zfs_share_smb(zfs_handle_t *zhp)
 }
 
 int
-zfs_share_iscsi(zfs_handle_t *zhp)
-{
-	return (zfs_share_proto(zhp, iscsi_only));
-}
-
-int
 zfs_shareall(zfs_handle_t *zhp)
 {
 	return (zfs_share_proto(zhp, share_all_proto));
@@ -881,7 +835,6 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	sa_share_t share;
 	int err;
 	char *mntpt;
-
 	/*
 	 * Mountpoint could get trashed if libshare calls getmntany
 	 * which it does during API initialization, so strdup the
@@ -929,17 +882,9 @@ zfs_unshare_proto(zfs_handle_t *zhp, const char *mountpoint,
 	/* check to see if need to unmount the filesystem */
 	if (mountpoint != NULL)
 		mountpoint = mntpt = zfs_strdup(hdl, mountpoint);
-	else if (ZFS_IS_VOLUME(zhp)) {
-		if (asprintf(&mntpt, "%s/%s/%s", ZVOL_DIR, ZVOL_DRIVER,
-			    zfs_get_name(zhp)) < 0)
-			return (SHARED_NOT_SHARED);
-		mountpoint = mntpt;
-	}
 
-	if ((mountpoint != NULL ||
-	    ((zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM) &&
-	    libzfs_mnttab_find(hdl, zhp->zfs_name, &entry) == 0)) ||
-	    zfs_get_type(zhp) == ZFS_TYPE_VOLUME) {
+	if (mountpoint != NULL || ((zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM) &&
+	    libzfs_mnttab_find(hdl, zfs_get_name(zhp), &entry) == 0)) {
 		zfs_share_proto_t *curr_proto;
 
 		if (mountpoint == NULL)
@@ -975,12 +920,6 @@ zfs_unshare_smb(zfs_handle_t *zhp, const char *mountpoint)
 	return (zfs_unshare_proto(zhp, mountpoint, smb_only));
 }
 
-int
-zfs_unshare_iscsi(zfs_handle_t *zhp, const char *mountpoint)
-{
-	return (zfs_unshare_proto(zhp, mountpoint, iscsi_only));
-}
-
 /*
  * Same as zfs_unmountall(), but for NFS and SMB unshares.
  */
@@ -1010,12 +949,6 @@ int
 zfs_unshareall_smb(zfs_handle_t *zhp)
 {
 	return (zfs_unshareall_proto(zhp, smb_only));
-}
-
-int
-zfs_unshareall_iscsi(zfs_handle_t *zhp)
-{
-	return (zfs_unshareall_proto(zhp, iscsi_only));
 }
 
 int
