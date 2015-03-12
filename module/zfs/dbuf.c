@@ -2698,6 +2698,12 @@ dbuf_write_ready(zio_t *zio, arc_buf_t *buf, void *vdb)
 	dnode_diduse_space(dn, delta - zio->io_prev_space_delta);
 	zio->io_prev_space_delta = delta;
 
+	if (BP_IS_HOLE(bp)) {
+		ASSERT0(bp->blk_fill);
+		DB_DNODE_EXIT(db);
+		return;
+	}
+
 	if (bp->blk_birth != 0) {
 		ASSERT((db->db_blkid != DMU_SPILL_BLKID &&
 		    BP_GET_TYPE(bp) == dn->dn_type) ||
@@ -2732,11 +2738,7 @@ dbuf_write_ready(zio_t *zio, arc_buf_t *buf, void *vdb)
 					fill++;
 			}
 		} else {
-			if (BP_IS_HOLE(bp)) {
-				fill = 0;
-			} else {
-				fill = 1;
-			}
+			fill = 1;
 		}
 	} else {
 		blkptr_t *ibp = ABD_TO_BUF(db->db.db_data);
