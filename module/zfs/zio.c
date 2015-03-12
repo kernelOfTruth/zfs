@@ -59,9 +59,6 @@ kmem_cache_t *zio_buf_cache[SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT];
 kmem_cache_t *zio_data_buf_cache[SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT];
 int zio_delay_max = ZIO_DELAY_MAX;
 
-#define	ZIO_PIPELINE_CONTINUE		0x100
-#define	ZIO_PIPELINE_STOP		0x101
-
 /*
  * The following actions directly effect the spa's sync-to-convergence logic.
  * The values below define the sync pass when we start performing the action.
@@ -2611,18 +2608,6 @@ zio_free_zil(spa_t *spa, uint64_t txg, blkptr_t *bp)
  * Read and write to physical devices
  * ==========================================================================
  */
-
-
-/*
- * Issue an I/O to the underlying vdev. Typically the issue pipeline
- * stops after this stage and will resume upon I/O completion.
- * However, there are instances where the vdev layer may need to
- * continue the pipeline when an I/O was not issued. Since the I/O
- * that was sent to the vdev layer might be different than the one
- * currently active in the pipeline (see vdev_queue_io()), we explicitly
- * force the underlying vdev layers to call either zio_execute() or
- * zio_interrupt() to ensure that the pipeline continues with the correct I/O.
- */
 static int
 zio_vdev_io_start(zio_t *zio)
 {
@@ -2640,8 +2625,7 @@ zio_vdev_io_start(zio_t *zio)
 		/*
 		 * The mirror_ops handle multiple DVAs in a single BP.
 		 */
-		vdev_mirror_ops.vdev_op_io_start(zio);
-		return (ZIO_PIPELINE_STOP);
+		return (vdev_mirror_ops.vdev_op_io_start(zio));
 	}
 
 	/*
@@ -2649,7 +2633,7 @@ zio_vdev_io_start(zio_t *zio)
 	 * can quickly react to certain workloads.  In particular, we care
 	 * about non-scrubbing, top-level reads and writes with the following
 	 * characteristics:
-	 *	- synchronous writes of user data to non-slog devices
+	 * 	- synchronous writes of user data to non-slog devices
 	 *	- any reads of user data
 	 * When these conditions are met, adjust the timestamp of spa_last_io
 	 * which allows the scan thread to adjust its workload accordingly.
@@ -2739,8 +2723,7 @@ zio_vdev_io_start(zio_t *zio)
 		}
 	}
 
-	vd->vdev_ops->vdev_op_io_start(zio);
-	return (ZIO_PIPELINE_STOP);
+	return (vd->vdev_ops->vdev_op_io_start(zio));
 }
 
 static int

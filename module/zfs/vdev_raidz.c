@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -1722,7 +1722,7 @@ vdev_raidz_child_done(zio_t *zio)
  *      vdevs have had errors, then create zio read operations to the parity
  *      columns' VDevs as well.
  */
-static void
+static int
 vdev_raidz_io_start(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
@@ -1766,8 +1766,7 @@ vdev_raidz_io_start(zio_t *zio)
 			    ZIO_FLAG_NODATA | ZIO_FLAG_OPTIONAL, NULL, NULL));
 		}
 
-		zio_execute(zio);
-		return;
+		return (ZIO_PIPELINE_CONTINUE);
 	}
 
 	ASSERT(zio->io_type == ZIO_TYPE_READ);
@@ -1807,7 +1806,7 @@ vdev_raidz_io_start(zio_t *zio)
 		}
 	}
 
-	zio_execute(zio);
+	return (ZIO_PIPELINE_CONTINUE);
 }
 
 
