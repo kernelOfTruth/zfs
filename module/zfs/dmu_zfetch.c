@@ -289,12 +289,15 @@ dmu_zfetch_fetch(dnode_t *dn, uint64_t blkid, uint64_t nblks)
 {
 	uint64_t	fetchsz;
 	uint64_t	i;
+	fstrans_cookie_t cookie;
 
 	fetchsz = dmu_zfetch_fetchsz(dn, blkid, nblks);
 
+	cookie = spl_fstrans_mark();
 	for (i = 0; i < fetchsz; i++) {
 		dbuf_prefetch(dn, blkid + i, ZIO_PRIORITY_ASYNC_READ);
 	}
+	spl_fstrans_unmark(cookie);
 
 	return (fetchsz);
 }
