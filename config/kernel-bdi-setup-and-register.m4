@@ -10,8 +10,7 @@ AC_DEFUN([ZFS_AC_KERNEL_BDI_SETUP_AND_REGISTER], [
 	], [
 		struct backing_dev_info bdi;
 		char *name = "bdi";
-		int error __attribute__((unused)) =
-		    bdi_setup_and_register(&bdi, name);
+		(void) bdi_setup_and_register(&bdi, name);
 	], [bdi_setup_and_register], [mm/backing-dev.c], [
 		AC_MSG_RESULT(yes)
 		AC_DEFINE(HAVE_2ARGS_BDI_SETUP_AND_REGISTER, 1,
@@ -25,8 +24,7 @@ AC_DEFUN([ZFS_AC_KERNEL_BDI_SETUP_AND_REGISTER], [
 			struct backing_dev_info bdi;
 			char *name = "bdi";
 			unsigned int cap = BDI_CAP_MAP_COPY;
-			int error __attribute__((unused)) =
-			    bdi_setup_and_register(&bdi, name, cap);
+			(void) bdi_setup_and_register(&bdi, name, cap);
 		], [bdi_setup_and_register], [mm/backing-dev.c], [
 			AC_MSG_RESULT(yes)
 			AC_DEFINE(HAVE_3ARGS_BDI_SETUP_AND_REGISTER, 1,
