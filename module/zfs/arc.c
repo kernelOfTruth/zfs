@@ -221,6 +221,11 @@ unsigned long zfs_arc_max = 0;
 unsigned long zfs_arc_min = 0;
 unsigned long zfs_arc_meta_limit = 0;
 
+/*
+ * Limit the number of restarts in arc_adjust_meta()
+ */
+unsigned long zfs_arc_meta_adjust_restarts = 4096;
+
 /* The 6 states: */
 static arc_state_t ARC_anon;
 static arc_state_t ARC_mru;
@@ -2216,6 +2221,7 @@ arc_adjust_meta(void)
 {
 	int64_t adjustmnt, delta, prune = 0;
 	arc_buf_contents_t type = ARC_BUFC_DATA;
+	unsigned long restarts = zfs_arc_meta_adjust_restarts;
 
 restart:
 	/*
@@ -2282,7 +2288,11 @@ restart:
 				arc_do_user_prune(prune);
 			}
 		}
-		goto restart;
+
+		if (restarts > 0) {
+			restarts--;
+			goto restart;
+		}
 	}
 }
 
@@ -5637,6 +5647,9 @@ MODULE_PARM_DESC(zfs_arc_meta_limit, "Meta limit for arc size");
 
 module_param(zfs_arc_meta_prune, int, 0644);
 MODULE_PARM_DESC(zfs_arc_meta_prune, "Meta objects to scan for prune");
+
+module_param(zfs_arc_meta_adjust_restarts, ulong, 0644);
+MODULE_PARM_DESC(zfs_arc_meta_adjust_restarts, "Limit number of restarts in arc_adjust_meta");
 
 module_param(zfs_arc_grow_retry, int, 0644);
 MODULE_PARM_DESC(zfs_arc_grow_retry, "Seconds before growing arc size");
