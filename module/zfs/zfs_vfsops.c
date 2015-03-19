@@ -1104,7 +1104,6 @@ zfs_sb_prune(struct super_block *sb, unsigned long nr_to_scan, int *objects)
 	 */
 	*objects = 0;
 	shrink_dcache_parent(sb->s_root);
-	error = invalidate_inodes(sb, 0);
 #endif
 	ZFS_EXIT(zsb);
 
