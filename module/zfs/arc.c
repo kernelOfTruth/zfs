@@ -160,7 +160,7 @@ static kcondvar_t	arc_reclaim_thr_cv;	/* used to signal reclaim thr */
 static uint8_t		arc_thread_exit;
 
 /* number of objects to prune from caches when at arc_meta_limit is reached */
-int zfs_arc_meta_prune = 10000;
+int zfs_arc_meta_prune = 13000;
 
 typedef enum arc_reclaim_strategy {
 	ARC_RECLAIM_AGGR,		/* Aggressive reclaim strategy */
