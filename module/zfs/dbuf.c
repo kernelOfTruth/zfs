@@ -2107,12 +2107,7 @@ dmu_buf_impl_t *
 dbuf_hold(dnode_t *dn, uint64_t blkid, void *tag)
 {
 	dmu_buf_impl_t *db;
-	int err;
-	fstrans_cookie_t cookie;
-
-	cookie = spl_fstrans_mark();
-	err = dbuf_hold_impl(dn, 0, blkid, FALSE, tag, &db);
-	spl_fstrans_unmark(cookie);
+	int err = dbuf_hold_impl(dn, 0, blkid, FALSE, tag, &db);
 	return (err ? NULL : db);
 }
 
