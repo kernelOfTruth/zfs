@@ -1115,6 +1115,9 @@ fail:
 	if (sa->sa_user_table)
 		kmem_free(sa->sa_user_table, sa->sa_user_table_sz);
 	mutex_exit(&sa->sa_lock);
+	avl_destroy(&sa->sa_layout_hash_tree);
+	avl_destroy(&sa->sa_layout_num_tree);
+	mutex_destroy(&sa->sa_lock);
 	kmem_free(sa, sizeof (sa_os_t));
 	return ((error == ECKSUM) ? EIO : error);
 }
@@ -1151,6 +1154,7 @@ sa_tear_down(objset_t *os)
 
 	avl_destroy(&sa->sa_layout_hash_tree);
 	avl_destroy(&sa->sa_layout_num_tree);
+	mutex_destroy(&sa->sa_lock);
 
 	kmem_free(sa, sizeof (sa_os_t));
 	os->os_sa = NULL;
