@@ -564,7 +564,6 @@ zfs_mknode(znode_t *dzp, vattr_t *vap, dmu_tx_t *tx, cred_t *cr,
 	sa_bulk_attr_t	*sa_attrs;
 	int		cnt = 0;
 	zfs_acl_locator_cb_t locate = { 0 };
-	fstrans_cookie_t cookie;
 
 	if (zsb->z_replay) {
 		obj = vap->va_nodeid;
@@ -611,7 +610,6 @@ zfs_mknode(znode_t *dzp, vattr_t *vap, dmu_tx_t *tx, cred_t *cr,
 		}
 	}
 
-	cookie = spl_fstrans_mark();
 	ZFS_OBJ_HOLD_ENTER(zsb, obj);
 	VERIFY(0 == sa_buf_hold(zsb->z_os, obj, NULL, &db));
 
@@ -787,7 +785,6 @@ zfs_mknode(znode_t *dzp, vattr_t *vap, dmu_tx_t *tx, cred_t *cr,
 	}
 	kmem_free(sa_attrs, sizeof (sa_bulk_attr_t) * ZPL_END);
 	ZFS_OBJ_HOLD_EXIT(zsb, obj);
-	spl_fstrans_unmark(cookie);
 }
 
 /*
@@ -893,7 +890,6 @@ zfs_zget(zfs_sb_t *zsb, uint64_t obj_num, znode_t **zpp)
 	znode_t		*zp;
 	int err;
 	sa_handle_t	*hdl;
-	fstrans_cookie_t cookie = spl_fstrans_mark();
 
 	*zpp = NULL;
 
@@ -903,7 +899,6 @@ again:
 	err = sa_buf_hold(zsb->z_os, obj_num, NULL, &db);
 	if (err) {
 		ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-		spl_fstrans_unmark(cookie);
 		return (err);
 	}
 
@@ -914,7 +909,6 @@ again:
 	    doi.doi_bonus_size < sizeof (znode_phys_t)))) {
 		sa_buf_rele(db, NULL);
 		ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-		spl_fstrans_unmark(cookie);
 		return (SET_ERROR(EINVAL));
 	}
 
@@ -962,7 +956,6 @@ again:
 		mutex_exit(&zp->z_lock);
 		sa_buf_rele(db, NULL);
 		ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-		spl_fstrans_unmark(cookie);
 		return (err);
 	}
 
@@ -984,7 +977,6 @@ again:
 		*zpp = zp;
 	}
 	ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-	spl_fstrans_unmark(cookie);
 	return (err);
 }
 
@@ -1000,9 +992,7 @@ zfs_rezget(znode_t *zp)
 	int err;
 	int count = 0;
 	uint64_t gen;
-	fstrans_cookie_t cookie;
 
-	cookie = spl_fstrans_mark();
 	ZFS_OBJ_HOLD_ENTER(zsb, obj_num);
 
 	mutex_enter(&zp->z_acl_lock);
@@ -1028,7 +1018,6 @@ zfs_rezget(znode_t *zp)
 	err = sa_buf_hold(zsb->z_os, obj_num, NULL, &db);
 	if (err) {
 		ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-		spl_fstrans_unmark(cookie);
 		return (err);
 	}
 
@@ -1039,7 +1028,6 @@ zfs_rezget(znode_t *zp)
 	    doi.doi_bonus_size < sizeof (znode_phys_t)))) {
 		sa_buf_rele(db, NULL);
 		ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-		spl_fstrans_unmark(cookie);
 		return (SET_ERROR(EINVAL));
 	}
 
@@ -1066,7 +1054,6 @@ zfs_rezget(znode_t *zp)
 	if (sa_bulk_lookup(zp->z_sa_hdl, bulk, count)) {
 		zfs_znode_dmu_fini(zp);
 		ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-		spl_fstrans_unmark(cookie);
 		return (SET_ERROR(EIO));
 	}
 
@@ -1075,7 +1062,6 @@ zfs_rezget(znode_t *zp)
 	if (gen != zp->z_gen) {
 		zfs_znode_dmu_fini(zp);
 		ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-		spl_fstrans_unmark(cookie);
 		return (SET_ERROR(EIO));
 	}
 
@@ -1084,7 +1070,6 @@ zfs_rezget(znode_t *zp)
 	zfs_inode_update(zp);
 
 	ZFS_OBJ_HOLD_EXIT(zsb, obj_num);
-	spl_fstrans_unmark(cookie);
 
 	return (0);
 }
@@ -1096,7 +1081,6 @@ zfs_znode_delete(znode_t *zp, dmu_tx_t *tx)
 	objset_t *os = zsb->z_os;
 	uint64_t obj = zp->z_id;
 	uint64_t acl_obj = zfs_external_acl(zp);
-	fstrans_cookie_t cookie = spl_fstrans_mark();
 
 	ZFS_OBJ_HOLD_ENTER(zsb, obj);
 	if (acl_obj) {
@@ -1106,7 +1090,6 @@ zfs_znode_delete(znode_t *zp, dmu_tx_t *tx)
 	VERIFY(0 == dmu_object_free(os, obj, tx));
 	zfs_znode_dmu_fini(zp);
 	ZFS_OBJ_HOLD_EXIT(zsb, obj);
-	spl_fstrans_unmark(cookie);
 }
 
 void
@@ -1114,7 +1097,7 @@ zfs_zinactive(znode_t *zp)
 {
 	zfs_sb_t *zsb = ZTOZSB(zp);
 	uint64_t z_id = zp->z_id;
-	fstrans_cookie_t cookie;
+	boolean_t drop_mutex = 0;
 
 	ASSERT(zp->z_sa_hdl);
 
@@ -1127,8 +1110,10 @@ zfs_zinactive(znode_t *zp)
 	 * zfs_zinactive() call path.  To avoid this deadlock the process
 	 * must not reacquire the mutex when it is already holding it.
 	 */
-	cookie = spl_fstrans_mark();
-	ZFS_OBJ_HOLD_ENTER(zsb, z_id);
+	if (!ZFS_OBJ_HOLD_OWNED(zsb, z_id)) {
+		ZFS_OBJ_HOLD_ENTER(zsb, z_id);
+		drop_mutex = 1;
+	}
 
 	mutex_enter(&zp->z_lock);
 
@@ -1139,8 +1124,8 @@ zfs_zinactive(znode_t *zp)
 	if (zp->z_unlinked) {
 		mutex_exit(&zp->z_lock);
 
-		ZFS_OBJ_HOLD_EXIT(zsb, z_id);
-		spl_fstrans_unmark(cookie);
+		if (drop_mutex)
+			ZFS_OBJ_HOLD_EXIT(zsb, z_id);
 
 		zfs_rmnode(zp);
 		return;
@@ -1149,8 +1134,8 @@ zfs_zinactive(znode_t *zp)
 	mutex_exit(&zp->z_lock);
 	zfs_znode_dmu_fini(zp);
 
-	ZFS_OBJ_HOLD_EXIT(zsb, z_id);
-	spl_fstrans_unmark(cookie);
+	if (drop_mutex)
+		ZFS_OBJ_HOLD_EXIT(zsb, z_id);
 }
 
 static inline int
