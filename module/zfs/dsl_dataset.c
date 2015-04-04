@@ -497,7 +497,7 @@ dsl_dataset_hold_obj(dsl_pool_t *dp, uint64_t dsobj, void *tag,
 		}
 	}
 	ASSERT3P(ds->ds_dbuf, ==, dbuf);
-	ASSERT3P(dsl_dataset_phys(ds), ==, ABD_TO_BUF(dbuf->db_data));
+	ASSERT3P(dsl_dataset_phys(ds), ==, dbuf->db_data);
 	ASSERT(dsl_dataset_phys(ds)->ds_prev_snap_obj != 0 ||
 	    spa_version(dp->dp_spa) < SPA_VERSION_ORIGIN ||
 	    dp->dp_origin_snap == NULL || ds == dp->dp_origin_snap);

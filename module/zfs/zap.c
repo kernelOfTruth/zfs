@@ -574,7 +574,7 @@ zap_deref_leaf(zap_t *zap, uint64_t h, dmu_tx_t *tx, krw_t lt, zap_leaf_t **lp)
 	int err;
 
 	ASSERT(zap->zap_dbuf == NULL ||
-	    zap_f_phys(zap) == ABD_TO_BUF(zap->zap_dbuf->db_data));
+	    zap_f_phys(zap) == zap->zap_dbuf->db_data);
 	ASSERT3U(zap_f_phys(zap)->zap_magic, ==, ZAP_MAGIC);
 	idx = ZAP_HASH_IDX(h, zap_f_phys(zap)->zap_ptrtbl.zt_shift);
 	err = zap_idx_to_blk(zap, idx, &blk);
