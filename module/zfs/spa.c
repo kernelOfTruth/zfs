@@ -3283,6 +3283,8 @@ spa_add_feature_stats(spa_t *spa, nvlist_t *config)
 
 	VERIFY0(nvlist_add_nvlist(config, ZPOOL_CONFIG_FEATURE_STATS,
 	    features));
+
+	mutex_exit(&spa->spa_feat_stats_lock);
 }
 
 int
