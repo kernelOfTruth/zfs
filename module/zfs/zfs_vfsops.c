@@ -769,10 +769,7 @@ zfs_sb_create(const char *osname, zfs_sb_t **zsbp)
 	if (error && error != ENOENT)
 		goto out;
 
-	mutex_init(&zsb->z_znodes_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&zsb->z_lock, NULL, MUTEX_DEFAULT, NULL);
-	list_create(&zsb->z_all_znodes, sizeof (znode_t),
-	    offsetof(znode_t, z_link_node));
 	rrw_init(&zsb->z_teardown_lock, B_FALSE);
 	rw_init(&zsb->z_teardown_inactive_lock, NULL, RW_DEFAULT, NULL);
 	rw_init(&zsb->z_fuid_lock, NULL, RW_DEFAULT, NULL);
@@ -889,9 +886,7 @@ zfs_sb_free(zfs_sb_t *zsb)
 
 	zfs_fuid_destroy(zsb);
 
-	mutex_destroy(&zsb->z_znodes_lock);
 	mutex_destroy(&zsb->z_lock);
-	list_destroy(&zsb->z_all_znodes);
 	rrw_destroy(&zsb->z_teardown_lock);
 	rw_destroy(&zsb->z_teardown_inactive_lock);
 	rw_destroy(&zsb->z_fuid_lock);
@@ -1130,16 +1125,6 @@ EXPORT_SYMBOL(zfs_sb_prune);
 int
 zfs_sb_teardown(zfs_sb_t *zsb, boolean_t unmounting)
 {
-	znode_t	*zp;
-
-	/*
-	 * If someone has not already unmounted this file system,
-	 * drain the iput_taskq to ensure all active references to the
-	 * zfs_sb_t have been handled only then can it be safely destroyed.
-	 */
-	if (zsb->z_os)
-		taskq_wait(dsl_pool_iput_taskq(dmu_objset_pool(zsb->z_os)));
-
 	rrw_enter(&zsb->z_teardown_lock, RW_WRITER, FTAG);
 
 	if (!unmounting) {
@@ -1174,21 +1159,6 @@ zfs_sb_teardown(zfs_sb_t *zsb, boolean_t unmounting)
 		rrw_exit(&zsb->z_teardown_lock, FTAG);
 		return (SET_ERROR(EIO));
 	}
-
-	/*
-	 * At this point there are no VFS ops active, and any new VFS ops
-	 * will fail with EIO since we have z_teardown_lock for writer (only
-	 * relevant for forced unmount).
-	 *
-	 * Release all holds on dbufs.
-	 */
-	mutex_enter(&zsb->z_znodes_lock);
-	for (zp = list_head(&zsb->z_all_znodes); zp != NULL;
-	    zp = list_next(&zsb->z_all_znodes, zp)) {
-		if (zp->z_sa_hdl)
-			zfs_znode_dmu_fini(zp);
-	}
-	mutex_exit(&zsb->z_znodes_lock);
 
 	/*
 	 * If we are unmounting, set the unmounted flag and let new VFS ops
@@ -1512,8 +1482,7 @@ EXPORT_SYMBOL(zfs_suspend_fs);
 int
 zfs_resume_fs(zfs_sb_t *zsb, const char *osname)
 {
-	int err, err2;
-	znode_t *zp;
+	int err;
 	uint64_t sa_obj = 0;
 
 	ASSERT(RRW_WRITE_HELD(&zsb->z_teardown_lock));
@@ -1556,26 +1525,6 @@ zfs_resume_fs(zfs_sb_t *zsb, const char *osname)
 
 	zfs_set_fuid_feature(zsb);
 	zsb->z_rollback_time = jiffies;
-
-	/*
-	 * Attempt to re-establish all the active inodes with their
-	 * dbufs.  If a zfs_rezget() fails, then we unhash the inode
-	 * and mark it stale.  This prevents a collision if a new
-	 * inode/object is created which must use the same inode
-	 * number.  The stale inode will be be released when the
-	 * VFS prunes the dentry holding the remaining references
-	 * on the stale inode.
-	 */
-	mutex_enter(&zsb->z_znodes_lock);
-	for (zp = list_head(&zsb->z_all_znodes); zp;
-	    zp = list_next(&zsb->z_all_znodes, zp)) {
-		err2 = zfs_rezget(zp);
-		if (err2) {
-			remove_inode_hash(ZTOI(zp));
-			zp->z_is_stale = B_TRUE;
-		}
-	}
-	mutex_exit(&zsb->z_znodes_lock);
 
 bail:
 	/* release the VFS ops */

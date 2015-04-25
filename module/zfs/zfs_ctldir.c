@@ -217,12 +217,6 @@ zfsctl_inode_alloc(zfs_sb_t *zsb, uint64_t id,
 		return (NULL);
 	}
 
-	mutex_enter(&zsb->z_znodes_lock);
-	list_insert_tail(&zsb->z_all_znodes, zp);
-	zsb->z_nr_znodes++;
-	membar_producer();
-	mutex_exit(&zsb->z_znodes_lock);
-
 	unlock_new_inode(ip);
 
 	return (ip);

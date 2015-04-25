@@ -271,17 +271,9 @@ void
 zfs_inode_destroy(struct inode *ip)
 {
 	znode_t *zp = ITOZ(ip);
-	zfs_sb_t *zsb = ZTOZSB(zp);
 
 	if (zfsctl_is_node(ip))
 		zfsctl_inode_destroy(ip);
-
-	mutex_enter(&zsb->z_znodes_lock);
-	if (list_link_active(&zp->z_link_node)) {
-		list_remove(&zsb->z_all_znodes, zp);
-		zsb->z_nr_znodes--;
-	}
-	mutex_exit(&zsb->z_znodes_lock);
 
 	if (zp->z_acl_cached) {
 		zfs_acl_free(zp->z_acl_cached);
@@ -432,12 +424,6 @@ zfs_znode_alloc(zfs_sb_t *zsb, dmu_buf_t *db, int blksz,
 	 * this case all the active inode are unhashed during the rollback.
 	 */
 	VERIFY3S(insert_inode_locked(ip), ==, 0);
-
-	mutex_enter(&zsb->z_znodes_lock);
-	list_insert_tail(&zsb->z_all_znodes, zp);
-	zsb->z_nr_znodes++;
-	membar_producer();
-	mutex_exit(&zsb->z_znodes_lock);
 
 	unlock_new_inode(ip);
 	return (zp);
@@ -1716,10 +1702,6 @@ zfs_create_fs(objset_t *os, cred_t *cr, nvlist_t *zplprops, dmu_tx_t *tx)
 	 */
 	if (sense == ZFS_CASE_INSENSITIVE || sense == ZFS_CASE_MIXED)
 		zsb->z_norm |= U8_TEXTPREP_TOUPPER;
-
-	mutex_init(&zsb->z_znodes_lock, NULL, MUTEX_DEFAULT, NULL);
-	list_create(&zsb->z_all_znodes, sizeof (znode_t),
-	    offsetof(znode_t, z_link_node));
 
 	zsb->z_hold_mtx = vmem_zalloc(sizeof (kmutex_t) * ZFS_OBJ_MTX_SZ,
 	    KM_SLEEP);
