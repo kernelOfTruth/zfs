@@ -5969,6 +5969,8 @@ main(int argc, char **argv)
 	(void) setlocale(LC_ALL, "");
 	(void) textdomain(TEXT_DOMAIN);
 
+	dprintf_setup(&argc, argv);
+
 	opterr = 0;
 
 	/*
