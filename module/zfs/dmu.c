@@ -771,7 +771,7 @@ dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	 * handle that here as well.
 	 */
 	if (dn->dn_maxblkid == 0) {
-		int newsz = offset > dn->dn_datablksz ? 0 :
+		uint64_t newsz = offset > dn->dn_datablksz ? 0 :
 		    MIN(size, dn->dn_datablksz - offset);
 		bzero((char *)buf + newsz, size - newsz);
 		size = newsz;
@@ -791,14 +791,14 @@ dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 			break;
 
 		for (i = 0; i < numbufs; i++) {
-			int tocpy;
-			int bufoff;
+			uint64_t tocpy;
+			int64_t bufoff;
 			dmu_buf_t *db = dbp[i];
 
 			ASSERT(size > 0);
 
 			bufoff = offset - db->db_offset;
-			tocpy = (int)MIN(db->db_size - bufoff, size);
+			tocpy = MIN(db->db_size - bufoff, size);
 
 			abd_copy_to_buf_off(buf, db->db_data, tocpy, bufoff);
 
@@ -826,14 +826,14 @@ dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	    FALSE, FTAG, &numbufs, &dbp));
 
 	for (i = 0; i < numbufs; i++) {
-		int tocpy;
-		int bufoff;
+		uint64_t tocpy;
+		int64_t bufoff;
 		dmu_buf_t *db = dbp[i];
 
 		ASSERT(size > 0);
 
 		bufoff = offset - db->db_offset;
-		tocpy = (int)MIN(db->db_size - bufoff, size);
+		tocpy = MIN(db->db_size - bufoff, size);
 
 		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
 
@@ -1119,13 +1119,15 @@ dmu_read_req(objset_t *os, uint64_t object, struct request *req)
 
 	req_offset = 0;
 	for (i = 0; i < numbufs; i++) {
-		int tocpy, didcpy, bufoff;
+		uint64_t tocpy;
+		int64_t bufoff;
+		int didcpy;
 		dmu_buf_t *db = dbp[i];
 
 		bufoff = offset - db->db_offset;
 		ASSERT3S(bufoff, >=, 0);
 
-		tocpy = (int)MIN(db->db_size - bufoff, size);
+		tocpy = MIN(db->db_size - bufoff, size);
 		if (tocpy == 0)
 			break;
 
@@ -1167,13 +1169,15 @@ dmu_write_req(objset_t *os, uint64_t object, struct request *req, dmu_tx_t *tx)
 
 	req_offset = 0;
 	for (i = 0; i < numbufs; i++) {
-		int tocpy, didcpy, bufoff;
+		uint64_t tocpy;
+		int64_t bufoff;
+		int didcpy;
 		dmu_buf_t *db = dbp[i];
 
 		bufoff = offset - db->db_offset;
 		ASSERT3S(bufoff, >=, 0);
 
-		tocpy = (int)MIN(db->db_size - bufoff, size);
+		tocpy = MIN(db->db_size - bufoff, size);
 		if (tocpy == 0)
 			break;
 
@@ -1223,14 +1227,14 @@ dmu_read_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size)
 		return (err);
 
 	for (i = 0; i < numbufs; i++) {
-		int tocpy;
-		int bufoff;
+		uint64_t tocpy;
+		int64_t bufoff;
 		dmu_buf_t *db = dbp[i];
 
 		ASSERT(size > 0);
 
 		bufoff = uio->uio_loffset - db->db_offset;
-		tocpy = (int)MIN(db->db_size - bufoff, size);
+		tocpy = MIN(db->db_size - bufoff, size);
 
 		if (xuio) {
 			dmu_buf_impl_t *dbi = (dmu_buf_impl_t *)db;
@@ -1274,14 +1278,14 @@ dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
 		return (err);
 
 	for (i = 0; i < numbufs; i++) {
-		int tocpy;
-		int bufoff;
+		uint64_t tocpy;
+		int64_t bufoff;
 		dmu_buf_t *db = dbp[i];
 
 		ASSERT(size > 0);
 
 		bufoff = uio->uio_loffset - db->db_offset;
-		tocpy = (int)MIN(db->db_size - bufoff, size);
+		tocpy = MIN(db->db_size - bufoff, size);
 
 		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
 
