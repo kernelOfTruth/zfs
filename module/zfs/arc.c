@@ -5640,8 +5640,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
     boolean_t *headroom_boost)
 {
 	arc_buf_hdr_t *hdr, *hdr_prev, *head;
-	uint64_t write_asize, write_psize, write_sz, headroom,
-	    buf_compress_minsz;
+	uint64_t write_asize, write_sz, headroom, buf_compress_minsz;
 	abd_t *buf_data;
 	boolean_t full;
 	l2arc_write_callback_t *cb;
@@ -5656,7 +5655,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 	*headroom_boost = B_FALSE;
 
 	pio = NULL;
-	write_sz = write_asize = write_psize = 0;
+	write_sz = write_asize = 0;
 	full = B_FALSE;
 	head = kmem_cache_alloc(hdr_l2only_cache, KM_PUSHPAGE);
 	head->b_flags |= ARC_FLAG_L2_WRITE_HEAD;
@@ -5693,6 +5692,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 		for (; hdr; hdr = hdr_prev) {
 			kmutex_t *hash_lock;
 			uint64_t buf_sz;
+			uint64_t buf_a_sz;
 
 			if (arc_warm == B_FALSE)
 				hdr_prev = multilist_sublist_next(mls, hdr);
@@ -5721,7 +5721,15 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 				continue;
 			}
 
-			if ((write_sz + hdr->b_size) > target_sz) {
+			/*
+			 * Assume that the buffer is not going to be compressed
+			 * and could take more space on disk because of a larger
+			 * disk block size.
+			 */
+			buf_sz = hdr->b_size;
+			buf_a_sz = vdev_psize_to_asize(dev->l2ad_vdev, buf_sz);
+
+			if ((write_asize + buf_a_sz) > target_sz) {
 				full = B_TRUE;
 				mutex_exit(hash_lock);
 				break;
@@ -5804,6 +5812,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 			mutex_exit(hash_lock);
 
 			write_sz += buf_sz;
+			write_asize += buf_a_sz;
 		}
 
 		multilist_sublist_unlock(mls);
@@ -5827,6 +5836,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 	 * and work backwards, retracing the course of the buffer selector
 	 * loop above.
 	 */
+	write_asize = 0;
 	for (hdr = list_prev(&dev->l2ad_buflist, head); hdr;
 	    hdr = list_prev(&dev->l2ad_buflist, hdr)) {
 		uint64_t buf_sz;
@@ -5875,7 +5885,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 
 		/* Compression may have squashed the buffer to zero length. */
 		if (buf_sz != 0) {
-			uint64_t buf_p_sz;
+			uint64_t buf_a_sz;
 
 			wzio = zio_write_phys(pio, dev->l2ad_vdev,
 			    dev->l2ad_hand, buf_sz, buf_data, ZIO_CHECKSUM_OFF,
@@ -5886,14 +5896,12 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 			    zio_t *, wzio);
 			(void) zio_nowait(wzio);
 
-			write_asize += buf_sz;
-
 			/*
 			 * Keep the clock hand suitably device-aligned.
 			 */
-			buf_p_sz = vdev_psize_to_asize(dev->l2ad_vdev, buf_sz);
-			write_psize += buf_p_sz;
-			dev->l2ad_hand += buf_p_sz;
+			buf_a_sz = vdev_psize_to_asize(dev->l2ad_vdev, buf_sz);
+			write_asize += buf_a_sz;
+			dev->l2ad_hand += buf_a_sz;
 		}
 	}
 
@@ -5968,12 +5976,6 @@ l2arc_compress_buf(arc_buf_hdr_t *hdr)
 
 	abd_return_buf(hdr->b_l1hdr.b_tmp_cdata, ddata, l2hdr->b_asize);
 
-	rounded = P2ROUNDUP(csize, (size_t)SPA_MINBLOCKSIZE);
-	if (rounded > csize) {
-		abd_zero_off(cdata, rounded - csize, csize);
-		csize = rounded;
-	}
-
 	if (csize == 0) {
 		/* zero block, indicate that there's nothing to write */
 		abd_free(cdata, len);
@@ -5982,11 +5984,19 @@ l2arc_compress_buf(arc_buf_hdr_t *hdr)
 		hdr->b_l1hdr.b_tmp_cdata = NULL;
 		ARCSTAT_BUMP(arcstat_l2_compress_zeros);
 		return (B_TRUE);
-	} else if (csize > 0 && csize < len) {
+	}
+
+	rounded = P2ROUNDUP(csize,
+	    (size_t)1 << l2hdr->b_dev->l2ad_vdev->vdev_ashift);
+	if (rounded < len) {
 		/*
 		 * Compression succeeded, we'll keep the cdata around for
 		 * writing and release it afterwards.
 		 */
+		if (rounded > csize) {
+			abd_zero_off(cdata, rounded - csize, csize);
+			csize = rounded;
+		}
 		HDR_SET_COMPRESS(hdr, ZIO_COMPRESS_LZ4);
 		l2hdr->b_asize = csize;
 		hdr->b_l1hdr.b_tmp_cdata = cdata;
