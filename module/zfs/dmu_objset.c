@@ -165,7 +165,8 @@ compression_changed_cb(void *arg, uint64_t newval)
 	 */
 	ASSERT(newval != ZIO_COMPRESS_INHERIT);
 
-	os->os_compress = zio_compress_select(newval, ZIO_COMPRESS_ON_VALUE);
+	os->os_compress = zio_compress_select(os->os_spa, newval,
+	    ZIO_COMPRESS_ON);
 }
 
 static void
@@ -428,7 +429,7 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	} else {
 		/* It's the meta-objset. */
 		os->os_checksum = ZIO_CHECKSUM_FLETCHER_4;
-		os->os_compress = ZIO_COMPRESS_LZJB;
+		os->os_compress = ZIO_COMPRESS_ON;
 		os->os_copies = spa_max_replication(spa);
 		os->os_dedup_checksum = ZIO_CHECKSUM_OFF;
 		os->os_dedup_verify = B_FALSE;
@@ -1792,7 +1793,15 @@ dmu_objset_find_dp_cb(void *arg)
 	dmu_objset_find_ctx_t *dcp = arg;
 	dsl_pool_t *dp = dcp->dc_dp;
 
-	dsl_pool_config_enter(dp, FTAG);
+	/*
+	 * We need to get a pool_config_lock here, as there are several
+	 * asssert(pool_config_held) down the stack. Getting a lock via
+	 * dsl_pool_config_enter is risky, as it might be stalled by a
+	 * pending writer. This would deadlock, as the write lock can
+	 * only be granted when our parent thread gives up the lock.
+	 * The _prio interface gives us priority over a pending writer.
+	 */
+	dsl_pool_config_enter_prio(dp, FTAG);
 
 	dmu_objset_find_dp_impl(dcp);
 
