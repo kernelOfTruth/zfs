@@ -470,10 +470,12 @@ cv_destroy(kcondvar_t *cv)
 void
 cv_wait(kcondvar_t *cv, kmutex_t *mp)
 {
+	int ret;
+
 	ASSERT3U(cv->cv_magic, ==, CV_MAGIC);
 	ASSERT3P(mutex_owner(mp), ==, curthread);
 	mp->m_owner = MTX_INIT;
-	int ret = pthread_cond_wait(&cv->cv, &mp->m_lock);
+	ret = pthread_cond_wait(&cv->cv, &mp->m_lock);
 	if (ret != 0)
 		VERIFY3S(ret, ==, EINTR);
 	mp->m_owner = curthread;

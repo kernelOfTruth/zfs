@@ -2214,6 +2214,8 @@ zfs_prop_get(zfs_handle_t *zhp, zfs_prop_t prop, char *propbuf, size_t proplen,
 	uint64_t val;
 	char *str;
 	const char *strval;
+	time_t time;
+	struct tm t;
 	boolean_t received = zfs_is_recvd_props_mode(zhp);
 
 	/*
@@ -2236,8 +2238,7 @@ zfs_prop_get(zfs_handle_t *zhp, zfs_prop_t prop, char *propbuf, size_t proplen,
 		 */
 		{
 			val = getprop_uint64(zhp, prop, &source);
-			time_t time = (time_t)val;
-			struct tm t;
+			time = (time_t)val;
 
 			if (literal ||
 			    localtime_r(&time, &t) == NULL ||
@@ -3262,11 +3263,12 @@ int
 zfs_destroy(zfs_handle_t *zhp, boolean_t defer)
 {
 	zfs_cmd_t zc = {"\0"};
+	int error;
 
 	if (zhp->zfs_type == ZFS_TYPE_BOOKMARK) {
 		nvlist_t *nv = fnvlist_alloc();
 		fnvlist_add_boolean(nv, zhp->zfs_name);
-		int error = lzc_destroy_bookmarks(nv, NULL);
+		error = lzc_destroy_bookmarks(nv, NULL);
 		fnvlist_free(nv);
 		if (error != 0) {
 			return (zfs_standard_error_fmt(zhp->zfs_hdl, errno,

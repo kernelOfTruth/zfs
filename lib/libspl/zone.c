@@ -48,10 +48,12 @@ getzoneidbyname(const char *name)
 ssize_t
 getzonenamebyid(zoneid_t id, char *buf, size_t buflen)
 {
+	ssize_t ret;
+	
 	if (id != GLOBAL_ZONEID)
 		return (EINVAL);
 
-	ssize_t ret = strlen(GLOBAL_ZONEID_NAME) + 1;
+	ret = strlen(GLOBAL_ZONEID_NAME) + 1;
 
 	if (buf == NULL || buflen == 0)
 		return (ret);

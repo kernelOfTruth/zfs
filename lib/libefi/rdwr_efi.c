@@ -534,6 +534,7 @@ check_label(int fd, dk_efi_t *dk_ioc)
 {
 	efi_gpt_t		*efi;
 	uint_t			crc;
+	len_t			headerSize;
 
 	if (efi_ioctl(fd, DKIOCGETEFI, dk_ioc) == -1) {
 		switch (errno) {
@@ -559,7 +560,7 @@ check_label(int fd, dk_efi_t *dk_ioc)
 	 */
 	crc = efi->efi_gpt_HeaderCRC32;
 	efi->efi_gpt_HeaderCRC32 = 0;
-	len_t headerSize = (len_t)LE_32(efi->efi_gpt_HeaderSize);
+	headerSize = (len_t)LE_32(efi->efi_gpt_HeaderSize);
 
 	if (headerSize < EFI_MIN_LABEL_SIZE || headerSize > EFI_LABEL_SIZE) {
 		if (efi_debug)

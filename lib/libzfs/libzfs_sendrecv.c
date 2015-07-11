@@ -1164,6 +1164,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 	}
 
 	if (!sdd->dryrun) {
+		enum lzc_send_flags flags = 0;
+
 		/*
 		 * If progress reporting is requested, spawn a new thread to
 		 * poll ZFS_IOC_SEND_PROGRESS at a regular interval.
@@ -1180,7 +1182,6 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 			}
 		}
 
-		enum lzc_send_flags flags = 0;
 		if (sdd->large_block)
 			flags |= LZC_SEND_FLAG_LARGE_BLOCK;
 		if (sdd->embed_data)
@@ -2986,10 +2987,10 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 
 	if (err == 0) {
 		nvlist_t *prop_errors;
+		nvpair_t *prop_err = NULL;
+
 		VERIFY(0 == nvlist_unpack((void *)(uintptr_t)zc.zc_nvlist_dst,
 		    zc.zc_nvlist_dst_size, &prop_errors, 0));
-
-		nvpair_t *prop_err = NULL;
 
 		while ((prop_err = nvlist_next_nvpair(prop_errors,
 		    prop_err)) != NULL) {
