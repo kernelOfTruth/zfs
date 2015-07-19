@@ -74,8 +74,8 @@ safe_malloc(size_t size)
 {
 	void *rv = malloc(size);
 	if (rv == NULL) {
-		(void) fprintf(stderr, "ERROR; failed to allocate %u bytes\n",
-		    (unsigned)size);
+		(void) fprintf(stderr, "ERROR; failed to allocate %zu bytes\n",
+		    size);
 		abort();
 	}
 	return (rv);
@@ -389,19 +389,15 @@ main(int argc, char *argv[])
 				    "checksum in stream.\n");
 				(void) printf("Expected checksum = "
 				    "%llx/%llx/%llx/%llx\n",
-				    (long long unsigned int)pcksum.zc_word[0],
-				    (long long unsigned int)pcksum.zc_word[1],
-				    (long long unsigned int)pcksum.zc_word[2],
-				    (long long unsigned int)pcksum.zc_word[3]);
+				    pcksum.zc_word[0],
+				    pcksum.zc_word[1],
+				    pcksum.zc_word[2],
+				    pcksum.zc_word[3]);
 			}
 			(void) printf("END checksum = %llx/%llx/%llx/%llx\n",
-			    (long long unsigned int)
 			    drre->drr_checksum.zc_word[0],
-			    (long long unsigned int)
 			    drre->drr_checksum.zc_word[1],
-			    (long long unsigned int)
 			    drre->drr_checksum.zc_word[2],
-			    (long long unsigned int)
 			    drre->drr_checksum.zc_word[3]);
 
 			ZIO_SET_CHECKSUM(&zc, 0, 0, 0, 0);
@@ -550,9 +546,8 @@ main(int argc, char *argv[])
 			}
 			if (verbose) {
 				(void) printf("SPILL block for object = %llu "
-				    "length = %llu\n",
-				    (long long unsigned int)drrs->drr_object,
-				    (long long unsigned int)drrs->drr_length);
+				    "length = %llu\n", drrs->drr_object,
+					drrs->drr_length);
 			}
 			(void) ssread(buf, drrs->drr_length, &zc);
 			if (dump) {
