@@ -74,8 +74,8 @@ safe_malloc(size_t size)
 {
 	void *rv = malloc(size);
 	if (rv == NULL) {
-		(void) fprintf(stderr, "ERROR; failed to allocate %u bytes\n",
-		    (unsigned)size);
+		(void) fprintf(stderr, "ERROR; failed to allocate %zu bytes\n",
+		    size);
 		abort();
 	}
 	return (rv);
@@ -123,10 +123,10 @@ read_hdr(dmu_replay_record_t *drr, zio_cksum_t *cksum)
 		fprintf(stderr, "invalid checksum\n");
 		(void) printf("Incorrect checksum in record header.\n");
 		(void) printf("Expected checksum = %llx/%llx/%llx/%llx\n",
-		    saved_cksum.zc_word[0],
-		    saved_cksum.zc_word[1],
-		    saved_cksum.zc_word[2],
-		    saved_cksum.zc_word[3]);
+		    (long long unsigned int)saved_cksum.zc_word[0],
+		    (long long unsigned int)saved_cksum.zc_word[1],
+		    (long long unsigned int)saved_cksum.zc_word[2],
+		    (long long unsigned int)saved_cksum.zc_word[3]);
 		exit(1);
 	}
 	return (sizeof (*drr));
