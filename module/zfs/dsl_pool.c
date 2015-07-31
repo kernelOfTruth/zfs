@@ -170,8 +170,8 @@ dsl_pool_open_impl(spa_t *spa, uint64_t txg)
 	mutex_init(&dp->dp_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&dp->dp_spaceavail_cv, NULL, CV_DEFAULT, NULL);
 
-	dp->dp_iput_taskq = taskq_create("z_iput", max_ncpus, minclsyspri,
-	    max_ncpus * 8, INT_MAX, TASKQ_PREPOPULATE);
+	dp->dp_iput_taskq = taskq_create("z_iput", max_ncpus, defclsyspri,
+	    max_ncpus * 8, INT_MAX, TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
 
 	return (dp);
 }
@@ -1048,6 +1048,13 @@ dsl_pool_config_enter(dsl_pool_t *dp, void *tag)
 	 */
 	ASSERT(!rrw_held(&dp->dp_config_rwlock, RW_READER));
 	rrw_enter(&dp->dp_config_rwlock, RW_READER, tag);
+}
+
+void
+dsl_pool_config_enter_prio(dsl_pool_t *dp, void *tag)
+{
+	ASSERT(!rrw_held(&dp->dp_config_rwlock, RW_READER));
+	rrw_enter_read_prio(&dp->dp_config_rwlock, tag);
 }
 
 void

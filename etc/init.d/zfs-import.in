@@ -156,6 +156,15 @@ do_import()
 			ZPOOL_IMPORT_PATH="/dev/disk/by-vdev:"
 		fi
 
+		# Help with getting LUKS partitions etc imported.
+		if [ -d "/dev/mapper" ]; then
+			if [ -n "$ZPOOL_IMPORT_PATH" ]; then
+				ZPOOL_IMPORT_PATH="$ZPOOL_IMPORT_PATH:/dev/mapper:"
+			else
+				ZPOOL_IMPORT_PATH="/dev/mapper:"
+			fi
+		fi
+
 		# ... and /dev at the very end, just for good measure.
 		ZPOOL_IMPORT_PATH="$ZPOOL_IMPORT_PATH$dirs:/dev"
 	fi
@@ -268,7 +277,7 @@ do_export()
 # Output the status and list of pools
 do_status()
 {
-	check_module_loaded || exit 0
+	check_module_loaded "zfs" || exit 0
 
 	"$ZPOOL" status && echo "" && "$ZPOOL" list
 }
@@ -289,7 +298,7 @@ do_start()
 		    zfs_log_begin_msg "Loading kernel ZFS infrastructure"
 		fi
 
-		if ! load_module
+		if ! load_module "zfs"
 		then
 			[ "$VERBOSE_MOUNT" = 'yes' ] && zfs_log_end_msg 1
 			return 5
@@ -307,7 +316,7 @@ do_start()
 do_stop()
 {
 	# Check to see if the module is even loaded.
-	check_module_loaded || exit 0
+	check_module_loaded "zfs" || exit 0
 
 	do_export
 }

@@ -26,6 +26,9 @@
 #undef TRACE_SYSTEM
 #define	TRACE_SYSTEM zfs
 
+#undef TRACE_SYSTEM_VAR
+#define	TRACE_SYSTEM_VAR zfs_arc
+
 #if !defined(_TRACE_ARC_H) || defined(TRACE_HEADER_MULTI_READ)
 #define	_TRACE_ARC_H
 
@@ -372,7 +375,6 @@ DECLARE_EVENT_CLASS(zfs_l2arc_evict_class,
 	    __field(uint64_t,		l2ad_hand)
 	    __field(uint64_t,		l2ad_start)
 	    __field(uint64_t,		l2ad_end)
-	    __field(uint64_t,		l2ad_evict)
 	    __field(boolean_t,		l2ad_first)
 	    __field(boolean_t,		l2ad_writing)
 
@@ -387,7 +389,6 @@ DECLARE_EVENT_CLASS(zfs_l2arc_evict_class,
 	    __entry->l2ad_hand		= dev->l2ad_hand;
 	    __entry->l2ad_start		= dev->l2ad_start;
 	    __entry->l2ad_end		= dev->l2ad_end;
-	    __entry->l2ad_evict		= dev->l2ad_evict;
 	    __entry->l2ad_first		= dev->l2ad_first;
 	    __entry->l2ad_writing	= dev->l2ad_writing;
 
@@ -395,12 +396,11 @@ DECLARE_EVENT_CLASS(zfs_l2arc_evict_class,
 	    __entry->all		= all;
 	),
 	TP_printk("l2ad { vdev { id %llu guid %llu state %llu } "
-	    "hand %llu start %llu end %llu evict %llu "
+	    "hand %llu start %llu end %llu "
 	    "first %d writing %d } taddr %llu all %d",
 	    __entry->vdev_id, __entry->vdev_guid, __entry->vdev_state,
 	    __entry->l2ad_hand, __entry->l2ad_start,
-	    __entry->l2ad_end, __entry->l2ad_evict,
-	    __entry->l2ad_first, __entry->l2ad_writing,
+	    __entry->l2ad_end, __entry->l2ad_first, __entry->l2ad_writing,
 	    __entry->taddr, __entry->all)
 );
 

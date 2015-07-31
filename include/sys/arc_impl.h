@@ -79,7 +79,7 @@ typedef struct arc_state {
 	 * total amount of data in this state; this includes: evictable,
 	 * non-evictable, ARC_BUFC_DATA, and ARC_BUFC_METADATA.
 	 */
-	uint64_t arcs_size;
+	refcount_t arcs_size;
 	/*
 	 * supports the "dbufs" kstat
 	 */
@@ -172,12 +172,12 @@ typedef struct l2arc_dev {
 	uint64_t		l2ad_hand;	/* next write location */
 	uint64_t		l2ad_start;	/* first addr on device */
 	uint64_t		l2ad_end;	/* last addr on device */
-	uint64_t		l2ad_evict;	/* last addr eviction reached */
 	boolean_t		l2ad_first;	/* first sweep through */
 	boolean_t		l2ad_writing;	/* currently writing */
 	kmutex_t		l2ad_mtx;	/* lock for buffer list */
 	list_t			l2ad_buflist;	/* buffer list */
 	list_node_t		l2ad_node;	/* device list node */
+	refcount_t		l2ad_alloc;	/* allocated bytes */
 } l2arc_dev_t;
 
 typedef struct l2arc_buf_hdr {
