@@ -289,8 +289,6 @@ zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
 		seg = UIO_BVEC;
 	ret = zpl_iter_read_common(kiocb, to->iov, to->nr_segs,
 	    iov_iter_count(to), seg, to->iov_offset);
-	if (ret > 0)
-		iov_iter_advance(to, ret);
 	return (ret);
 }
 #else
@@ -391,8 +389,6 @@ zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
 		seg = UIO_BVEC;
 	ret = zpl_iter_write_common(kiocb, from->iov, from->nr_segs,
 	    iov_iter_count(from), seg, from->iov_offset);
-	if (ret > 0)
-		iov_iter_advance(from, ret);
 	return (ret);
 }
 #else
