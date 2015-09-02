@@ -51,6 +51,7 @@
 unsigned int zvol_inhibit_dev = 0;
 unsigned int zvol_major = ZVOL_MAJOR;
 unsigned int zvol_threads = 32;
+unsigned int zvol_prefetch_bytes = (128 * 1024);
 unsigned long zvol_max_discard_blocks = 16384;
 
 static taskq_t *zvol_taskq;
@@ -1364,6 +1365,7 @@ __zvol_create_minor(const char *name, boolean_t ignore_snapdev)
 	objset_t *os;
 	dmu_object_info_t *doi;
 	uint64_t volsize;
+	uint64_t len = MIN(MAX(zvol_prefetch_bytes, 0), SPA_MAXBLOCKSIZE);
 	unsigned minor = 0;
 	int error = 0;
 
@@ -1438,6 +1440,15 @@ __zvol_create_minor(const char *name, boolean_t ignore_snapdev)
 		else
 			zil_replay(os, zv, zvol_replay_vector);
 	}
+
+	/*
+	 * When udev detects the addition of the device it will immediately
+	 * invoke blkid(8) to determine the type of content on the device.
+	 * Prefetching the blocks commonly scanned by blkid(8) will speed
+	 * up this process.
+	 */
+	dmu_prefetch(os, ZVOL_OBJ, 0, len);
+	dmu_prefetch(os, ZVOL_OBJ, volsize - len, len);
 
 	zv->zv_objset = NULL;
 out_dmu_objset_disown:
@@ -1707,6 +1718,9 @@ MODULE_PARM_DESC(zvol_major, "Major number for zvol device");
 
 module_param(zvol_threads, uint, 0444);
 MODULE_PARM_DESC(zvol_threads, "Max number of threads to handle I/O requests");
+
+module_param(zvol_prefetch_bytes, uint, 0644);
+MODULE_PARM_DESC(zvol_prefetch_bytes, "Prefetch N bytes at zvol start+end");
 
 module_param(zvol_max_discard_blocks, ulong, 0444);
 MODULE_PARM_DESC(zvol_max_discard_blocks, "Max number of blocks to discard");
