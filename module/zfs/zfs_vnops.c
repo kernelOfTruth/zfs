@@ -4098,15 +4098,16 @@ zfs_inactive(struct inode *ip)
 	znode_t	*zp = ITOZ(ip);
 	zfs_sb_t *zsb = ITOZSB(ip);
 	int error;
+	int need_unlock = 0;
 
-	if (zfsctl_is_node(ip)) {
-		zfsctl_inode_inactive(ip);
-		return;
+	/* Only read lock if we haven't already write locked, e.g. rollback */
+	if (!RW_WRITE_HELD(&zsb->z_teardown_inactive_lock)) {
+		need_unlock = 1;
+		rw_enter(&zsb->z_teardown_inactive_lock, RW_READER);
 	}
-
-	rw_enter(&zsb->z_teardown_inactive_lock, RW_READER);
 	if (zp->z_sa_hdl == NULL) {
-		rw_exit(&zsb->z_teardown_inactive_lock);
+		if (need_unlock)
+			rw_exit(&zsb->z_teardown_inactive_lock);
 		return;
 	}
 
@@ -4129,7 +4130,8 @@ zfs_inactive(struct inode *ip)
 	}
 
 	zfs_zinactive(zp);
-	rw_exit(&zsb->z_teardown_inactive_lock);
+	if (need_unlock)
+		rw_exit(&zsb->z_teardown_inactive_lock);
 }
 EXPORT_SYMBOL(zfs_inactive);
 
