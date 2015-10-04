@@ -604,11 +604,35 @@ dbuf_loan_arcbuf(dmu_buf_impl_t *db)
 	return (abuf);
 }
 
+/*
+ * Calculate which level n block references the data at the level 0 offset
+ * provided.
+ */
 uint64_t
-dbuf_whichblock(dnode_t *dn, uint64_t offset)
+dbuf_whichblock(dnode_t *dn, int64_t level, uint64_t offset)
 {
-	if (dn->dn_datablkshift) {
-		return (offset >> dn->dn_datablkshift);
+	if (dn->dn_datablkshift != 0 && dn->dn_indblkshift != 0) {
+		/*
+		 * The level n blkid is equal to the level 0 blkid divided by
+		 * the number of level 0s in a level n block.
+		 *
+		 * The level 0 blkid is offset >> datablkshift =
+		 * offset / 2^datablkshift.
+		 *
+		 * The number of level 0s in a level n is the number of block
+		 * pointers in an indirect block, raised to the power of level.
+		 * This is 2^(indblkshift - SPA_BLKPTRSHIFT)^level =
+		 * 2^(level*(indblkshift - SPA_BLKPTRSHIFT)).
+		 *
+		 * Thus, the level n blkid is: offset /
+		 * ((2^datablkshift)*(2^(level*(indblkshift - SPA_BLKPTRSHIFT)))
+		 * = offset / 2^(datablkshift + level *
+		 *   (indblkshift - SPA_BLKPTRSHIFT))
+		 * = offset >> (datablkshift + level *
+		 *   (indblkshift - SPA_BLKPTRSHIFT))
+		 */
+		return (offset >> (dn->dn_datablkshift + level *
+		    (dn->dn_indblkshift - SPA_BLKPTRSHIFT)));
 	} else {
 		ASSERT3U(offset, <, dn->dn_datablksz);
 		return (0);
@@ -1940,6 +1964,12 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 	return (db);
 }
 
+/*
+ * Note: While bpp will always be updated if the function returns success,
+ * parentp will not be updated if the dnode does not have dn_dbuf filled in;
+ * this happens when the dnode is the meta-dnode, or a userused or groupused
+ * object.
+ */
 static int
 dbuf_do_evict(void *private)
 {
@@ -2005,11 +2035,96 @@ dbuf_destroy(dmu_buf_impl_t *db)
 	arc_space_return(sizeof (dmu_buf_impl_t), ARC_SPACE_OTHER);
 }
 
-void
-dbuf_prefetch(dnode_t *dn, uint64_t blkid, zio_priority_t prio)
+typedef struct dbuf_prefetch_arg {
+	spa_t *dpa_spa;	/* The spa to issue the prefetch in. */
+	zbookmark_phys_t dpa_zb; /* The target block to prefetch. */
+	int dpa_epbs; /* Entries (blkptr_t's) Per Block Shift. */
+	int dpa_curlevel; /* The current level that we're reading */
+	zio_priority_t dpa_prio; /* The priority I/Os should be issued at. */
+	zio_t *dpa_zio; /* The parent zio_t for all prefetches. */
+	arc_flags_t dpa_aflags; /* Flags to pass to the final prefetch. */
+} dbuf_prefetch_arg_t;
+
+/*
+ * Actually issue the prefetch read for the block given.
+ */
+static void
+dbuf_issue_final_prefetch(dbuf_prefetch_arg_t *dpa, blkptr_t *bp)
 {
-	dmu_buf_impl_t *db = NULL;
-	blkptr_t *bp = NULL;
+	if (BP_IS_HOLE(bp) || BP_IS_EMBEDDED(bp))
+		return;
+
+	arc_flags_t aflags =
+	    dpa->dpa_aflags | ARC_FLAG_NOWAIT | ARC_FLAG_PREFETCH;
+
+	ASSERT3U(dpa->dpa_curlevel, ==, BP_GET_LEVEL(bp));
+	ASSERT3U(dpa->dpa_curlevel, ==, dpa->dpa_zb.zb_level);
+	ASSERT(dpa->dpa_zio != NULL);
+	(void) arc_read(dpa->dpa_zio, dpa->dpa_spa, bp, NULL, NULL,
+	    dpa->dpa_prio, ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
+	    &aflags, &dpa->dpa_zb);
+}
+
+/*
+ * Called when an indirect block above our prefetch target is read in.  This
+ * will either read in the next indirect block down the tree or issue the actual
+ * prefetch if the next block down is our target.
+ */
+static void
+dbuf_prefetch_indirect_done(zio_t *zio, arc_buf_t *abuf, void *private)
+{
+	dbuf_prefetch_arg_t *dpa = private;
+
+	ASSERT3S(dpa->dpa_zb.zb_level, <, dpa->dpa_curlevel);
+	ASSERT3S(dpa->dpa_curlevel, >, 0);
+	if (zio != NULL) {
+		ASSERT3S(BP_GET_LEVEL(zio->io_bp), ==, dpa->dpa_curlevel);
+		ASSERT3U(BP_GET_LSIZE(zio->io_bp), ==, zio->io_size);
+		ASSERT3P(zio->io_spa, ==, dpa->dpa_spa);
+	}
+
+	dpa->dpa_curlevel--;
+
+	uint64_t nextblkid = dpa->dpa_zb.zb_blkid >>
+	    (dpa->dpa_epbs * (dpa->dpa_curlevel - dpa->dpa_zb.zb_level));
+	blkptr_t *bp = ((blkptr_t *)abuf->b_data) +
+	    P2PHASE(nextblkid, 1ULL << dpa->dpa_epbs);
+	if (BP_IS_HOLE(bp) || (zio != NULL && zio->io_error != 0)) {
+		kmem_free(dpa, sizeof (*dpa));
+	} else if (dpa->dpa_curlevel == dpa->dpa_zb.zb_level) {
+		ASSERT3U(nextblkid, ==, dpa->dpa_zb.zb_blkid);
+		dbuf_issue_final_prefetch(dpa, bp);
+		kmem_free(dpa, sizeof (*dpa));
+	} else {
+		arc_flags_t iter_aflags = ARC_FLAG_NOWAIT;
+		zbookmark_phys_t zb;
+
+		ASSERT3U(dpa->dpa_curlevel, ==, BP_GET_LEVEL(bp));
+
+		SET_BOOKMARK(&zb, dpa->dpa_zb.zb_objset,
+		    dpa->dpa_zb.zb_object, dpa->dpa_curlevel, nextblkid);
+
+		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
+		    bp, dbuf_prefetch_indirect_done, dpa, dpa->dpa_prio,
+		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
+		    &iter_aflags, &zb);
+	}
+	(void) arc_buf_remove_ref(abuf, private);
+}
+
+/*
+ * Issue prefetch reads for the given block on the given level.  If the indirect
+ * blocks above that block are not in memory, we will read them in
+ * asynchronously.  As a result, this call never blocks waiting for a read to
+ * complete.
+ */
+void
+dbuf_prefetch(dnode_t *dn, int64_t level, uint64_t blkid, zio_priority_t prio,
+    arc_flags_t aflags)
+{
+	blkptr_t bp;
+	int epbs, nlevels, curlevel;
+	uint64_t curblkid;
 
 	ASSERT(blkid != DMU_BONUS_BLKID);
 	ASSERT(RW_LOCK_HELD(&dn->dn_struct_rwlock));
@@ -2153,7 +2268,8 @@ top:
  * on the stack for 20 levels of recursion.
  */
 int
-dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid, int fail_sparse,
+dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
+    boolean_t fail_sparse, boolean_t fail_uncached,
     void *tag, dmu_buf_impl_t **dbp)
 {
 	struct dbuf_hold_impl_data *dh;
@@ -2188,16 +2304,14 @@ __dbuf_hold_impl_init(struct dbuf_hold_impl_data *dh,
 dmu_buf_impl_t *
 dbuf_hold(dnode_t *dn, uint64_t blkid, void *tag)
 {
-	dmu_buf_impl_t *db;
-	int err = dbuf_hold_impl(dn, 0, blkid, FALSE, tag, &db);
-	return (err ? NULL : db);
+	return (dbuf_hold_level(dn, 0, blkid, tag));
 }
 
 dmu_buf_impl_t *
 dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, void *tag)
 {
 	dmu_buf_impl_t *db;
-	int err = dbuf_hold_impl(dn, level, blkid, FALSE, tag, &db);
+	int err = dbuf_hold_impl(dn, level, blkid, FALSE, FALSE, tag, &db);
 	return (err ? NULL : db);
 }
 
@@ -2549,8 +2663,8 @@ dbuf_check_blkptr(dnode_t *dn, dmu_buf_impl_t *db)
 		if (parent == NULL) {
 			mutex_exit(&db->db_mtx);
 			rw_enter(&dn->dn_struct_rwlock, RW_READER);
-			(void) dbuf_hold_impl(dn, db->db_level+1,
-			    db->db_blkid >> epbs, FALSE, db, &parent);
+			parent = dbuf_hold_level(dn, db->db_level + 1,
+			    db->db_blkid >> epbs, db);
 			rw_exit(&dn->dn_struct_rwlock);
 			mutex_enter(&db->db_mtx);
 			db->db_parent = parent;
