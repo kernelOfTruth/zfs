@@ -45,6 +45,7 @@
 #include <sys/cred.h>
 #include <sys/fs/zfs.h>
 #include <sys/uio.h>
+#include <sys/zio_priority.h>
 
 #ifdef	__cplusplus
 extern "C" {

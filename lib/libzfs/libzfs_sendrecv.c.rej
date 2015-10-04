@@ -1,0 +1,47 @@
+--- lib/libzfs/libzfs_sendrecv.c
++++ lib/libzfs/libzfs_sendrecv.c
+@@ -2757,10 +2758,15 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
+ 		}
+ 		if (flags->verbose)
+ 			(void) printf("found clone origin %s\n", zc.zc_string);
++	} else if (originsnap) {
++		(void) strncpy(zc.zc_string, originsnap, ZFS_MAXNAMELEN);
++		if (flags->verbose)
++			(void) printf("using provided clone origin %s\n",
++			    zc.zc_string);
+ 	}
+ 
+ 	stream_wantsnewfs = (drrb->drr_fromguid == NULL ||
+-	    (drrb->drr_flags & DRR_FLAG_CLONE));
++	    (drrb->drr_flags & DRR_FLAG_CLONE) || originsnap);
+ 
+ 	if (stream_wantsnewfs) {
+ 		/*
+@@ -3256,18 +3269,24 @@ zfs_receive_impl(libzfs_handle_t *hdl, const char *tosnap, recvflags_t *flags,
+  * (-1 will override -2).
+  */
+ int
+-zfs_receive(libzfs_handle_t *hdl, const char *tosnap, recvflags_t *flags,
+-    int infd, avl_tree_t *stream_avl)
++zfs_receive(libzfs_handle_t *hdl, const char *tosnap, nvlist_t *props,
++    recvflags_t *flags, int infd, avl_tree_t *stream_avl)
+ {
+ 	char *top_zfs = NULL;
+ 	int err;
+ 	int cleanup_fd;
+ 	uint64_t action_handle = 0;
++	char *originsnap = NULL;
++	if (props) {
++		err = nvlist_lookup_string(props, "origin", &originsnap);
++		if (err && err != ENOENT)
++			return (err);
++	}
+ 
+ 	cleanup_fd = open(ZFS_DEV, O_RDWR|O_EXCL);
+ 	VERIFY(cleanup_fd >= 0);
+ 
+-	err = zfs_receive_impl(hdl, tosnap, flags, infd, NULL, NULL,
++	err = zfs_receive_impl(hdl, tosnap, originsnap, flags, infd, NULL, NULL,
+ 	    stream_avl, &top_zfs, cleanup_fd, &action_handle);
+ 
+ 	VERIFY(0 == close(cleanup_fd));
