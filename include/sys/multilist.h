@@ -83,6 +83,7 @@ unsigned int multilist_get_num_sublists(multilist_t *);
 unsigned int multilist_get_random_index(multilist_t *);
 
 multilist_sublist_t *multilist_sublist_lock(multilist_t *, unsigned int);
+multilist_sublist_t *multilist_sublist_lock_obj(multilist_t *, void *);
 void multilist_sublist_unlock(multilist_sublist_t *);
 
 void multilist_sublist_insert_head(multilist_sublist_t *, void *);

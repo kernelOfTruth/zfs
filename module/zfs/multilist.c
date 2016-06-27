@@ -294,6 +294,13 @@ multilist_sublist_lock(multilist_t *ml, unsigned int sublist_idx)
 	return (mls);
 }
 
+/* Lock and return the sublist that would be used to store the specified obj */
+multilist_sublist_t *
+multilist_sublist_lock_obj(multilist_t *ml, void *obj)
+{
+	return (multilist_sublist_lock(ml, ml->ml_index_func(ml, obj)));
+}
+
 void
 multilist_sublist_unlock(multilist_sublist_t *mls)
 {

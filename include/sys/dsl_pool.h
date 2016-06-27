@@ -124,6 +124,7 @@ typedef struct dsl_pool {
 	txg_list_t dp_dirty_zilogs;
 	txg_list_t dp_dirty_dirs;
 	txg_list_t dp_sync_tasks;
+	taskq_t *dp_sync_taskq;
 
 	/*
 	 * Protects administrative changes (properties, namespace)
