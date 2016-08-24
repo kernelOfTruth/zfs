@@ -345,6 +345,22 @@ static const uint8_t __attribute__((aligned(32))) _mul_mask = 0x0F;
 	kfpu_end();							\
 }
 
+#define	ZERO_STRIDE		4
+#define	ZERO_DEFINE()		{}
+#define	ZERO_D			0, 1, 2, 3
+
+#define	COPY_STRIDE		4
+#define	COPY_DEFINE()		{}
+#define	COPY_D			0, 1, 2, 3
+
+#define	ADD_STRIDE		4
+#define	ADD_DEFINE()		{}
+#define	ADD_D 			0, 1, 2, 3
+
+#define	MUL_STRIDE		4
+#define	MUL_DEFINE() 		{}
+#define	MUL_D			0, 1, 2, 3
+
 #define	GEN_P_DEFINE()		{}
 #define	GEN_P_STRIDE		4
 #define	GEN_P_P			0, 1, 2, 3
