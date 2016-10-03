@@ -6996,7 +6996,7 @@ module_param(spa_load_verify_data, int, 0644);
 MODULE_PARM_DESC(spa_load_verify_data,
 	"Set to traverse data on pool import");
 
-module_param(zio_taskq_batch_pct, uint, 0444);
+module_param(zio_taskq_batch_pct, uint, 0644);
 MODULE_PARM_DESC(zio_taskq_batch_pct,
 	"Percentage of CPUs to run an IO worker thread");
 
