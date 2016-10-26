@@ -120,6 +120,7 @@
 #include <sys/zfs_context.h>
 #include <sys/zfs_znode.h>
 #ifdef _KERNEL
+#include <linux/scatterlist.h>
 #include <linux/kmap_compat.h>
 #endif
 
@@ -179,7 +180,13 @@ static kstat_t *abd_ksp;
 static struct page *
 abd_alloc_chunk(void)
 {
-	struct page *c = alloc_page(kmem_flags_convert(KM_SLEEP));
+	struct page *c;
+	gfp_t gfp = kmem_flags_convert(KM_SLEEP);
+#ifdef CONFIG_HIGHMEM
+	gfp |= __GFP_HIGHMEM;
+#endif
+	while (!(c = alloc_page(gfp)))
+		schedule_timeout_interruptible(1);
 	ASSERT3P(c, !=, NULL);
 	return (c);
 }
@@ -187,7 +194,7 @@ abd_alloc_chunk(void)
 static void
 abd_free_chunk(struct page *c)
 {
-	__free_pages(c, 0);
+	__free_page(c);
 }
 
 void
@@ -212,15 +219,59 @@ abd_fini(void)
 
 #else
 
+#ifndef PAGE_SHIFT
+#define	PAGE_SHIFT (highbit64(PAGESIZE)-1)
+#endif
 struct page;
 #define	kpm_enable			1
 #define	abd_alloc_chunk() \
 	((struct page *) umem_alloc_aligned(PAGESIZE, 64, KM_SLEEP))
-#define	abd_free_chunk(chunk) 		umem_free(chunk, PAGESIZE)
+#define	abd_free_chunk(chunk)		umem_free(chunk, PAGESIZE)
 #define	zfs_kmap_atomic(chunk, km)	((void *)chunk)
 #define	zfs_kunmap_atomic(addr, km)	do { (void)(addr); } while (0)
 #define	local_irq_save(flags)		do { (void)(flags); } while (0)
 #define	local_irq_restore(flags)	do { (void)(flags); } while (0)
+#define	nth_page(pg, i) \
+	((struct page *)((void *)(pg) + (i) * PAGESIZE))
+
+struct scatterlist {
+	struct page *page;
+	int length;
+	int end;
+};
+
+static void
+sg_init_table(struct scatterlist *sg, int nr) {
+	memset(sg, 0, nr * sizeof (struct scatterlist));
+	sg[nr - 1].end = 1;
+}
+
+#define	for_each_sg(sgl, sg, nr, i)	\
+	for ((i) = 0, (sg) = (sgl); (i) < (nr); (i)++, (sg) = sg_next(sg))
+
+static inline void
+sg_set_page(struct scatterlist *sg, struct page *page, unsigned int len,
+    unsigned int offset)
+{
+	/* currently we don't use offset */
+	ASSERT(offset == 0);
+	sg->page = page;
+	sg->length = len;
+}
+
+static inline struct page *
+sg_page(struct scatterlist *sg)
+{
+	return (sg->page);
+}
+
+static inline struct scatterlist *
+sg_next(struct scatterlist *sg)
+{
+	if (sg->end)
+		return (NULL);
+	return (sg + 1);
+}
 
 void
 abd_init(void)
@@ -234,18 +285,15 @@ abd_fini(void)
 
 #endif /* _KERNEL */
 
+#define	ABD_SCATTER(abd)	(abd->abd_u.abd_scatter)
+#define	ABD_BUF(abd)		(abd->abd_u.abd_linear.abd_buf)
+#define	abd_for_each_sg(abd, sg, n, i)	\
+	for_each_sg(ABD_SCATTER(abd).abd_sgl, sg, n, i)
+
 static inline size_t
 abd_chunkcnt_for_bytes(size_t size)
 {
 	return (P2ROUNDUP(size, PAGESIZE) / PAGESIZE);
-}
-
-static inline size_t
-abd_scatter_chunkcnt(abd_t *abd)
-{
-	ASSERT(!abd_is_linear(abd));
-	return (abd_chunkcnt_for_bytes(
-	    abd->abd_u.abd_scatter.abd_offset + abd->abd_size));
 }
 
 static inline void
@@ -262,21 +310,24 @@ abd_verify(abd_t *abd)
 	} else {
 		size_t n;
 		int i;
+		struct scatterlist *sg;
 
-		ASSERT3U(abd->abd_u.abd_scatter.abd_offset, <, PAGESIZE);
-		n = abd_scatter_chunkcnt(abd);
-		for (i = 0; i < n; i++) {
-			ASSERT3P(
-			    abd->abd_u.abd_scatter.abd_chunks[i], !=, NULL);
+		ASSERT3U(ABD_SCATTER(abd).abd_nents, >, 0);
+		ASSERT3U(ABD_SCATTER(abd).abd_offset, <,
+		    ABD_SCATTER(abd).abd_sgl->length);
+		n = ABD_SCATTER(abd).abd_nents;
+		abd_for_each_sg(abd, sg, n, i) {
+			ASSERT3P(sg_page(sg), !=, NULL);
 		}
 	}
 }
 
 static inline abd_t *
-abd_alloc_struct(size_t chunkcnt)
+abd_alloc_struct(void)
 {
-	size_t size = offsetof(abd_t, abd_u.abd_scatter.abd_chunks[chunkcnt]);
+	size_t size = sizeof (abd_t);
 	abd_t *abd = kmem_alloc(size, KM_PUSHPAGE);
+
 	ASSERT3P(abd, !=, NULL);
 	ABDSTAT_INCR(abdstat_struct_size, size);
 
@@ -286,10 +337,90 @@ abd_alloc_struct(size_t chunkcnt)
 static inline void
 abd_free_struct(abd_t *abd)
 {
-	size_t chunkcnt = abd_is_linear(abd) ? 0 : abd_scatter_chunkcnt(abd);
-	int size = offsetof(abd_t, abd_u.abd_scatter.abd_chunks[chunkcnt]);
+	int size = sizeof (abd_t);
+
 	kmem_free(abd, size);
 	ABDSTAT_INCR(abdstat_struct_size, -size);
+}
+
+#define	MAX_ALLOC_SIZE (1024*1024)
+
+static int
+abd_alloc_pages_merge(abd_t *abd, size_t size)
+{
+#if defined(_KERNEL) && !defined(CONFIG_HIGHMEM) && defined(HAVE_SG_FROM_PAGES)
+	struct sg_table table;
+	struct page **pages;
+	unsigned long paddr;
+	size_t s;
+	int i, ret, n = abd_chunkcnt_for_bytes(size);
+	gfp_t gfp = kmem_flags_convert(KM_SLEEP);
+
+	pages = kmem_alloc(sizeof (*pages) * n, KM_NOSLEEP);
+	if (!pages)
+		return (-1);
+
+	i = 0;
+	s = size;
+	while (s > 0) {
+		ssize_t len = MIN(s, MAX_ALLOC_SIZE);
+		paddr = (unsigned long)alloc_pages_exact(len,
+		    GFP_NOWAIT|__GFP_NOWARN);
+		if (paddr == 0)
+			break;
+		s -= len;
+		for (; len > 0; len -= PAGESIZE, paddr += PAGESIZE, i++)
+			pages[i] = virt_to_page(paddr);
+	}
+
+	for (; i < n; i++)
+		while (!(pages[i] = alloc_page(gfp)))
+			schedule_timeout_interruptible(1);
+
+	while ((ret = sg_alloc_table_from_pages(&table, pages, n, 0,
+	    size, gfp))) {
+		VERIFY3S(ret, ==, -ENOMEM);
+		schedule_timeout_interruptible(1);
+	}
+
+	ABD_SCATTER(abd).abd_sgl = table.sgl;
+	ABD_SCATTER(abd).abd_nents = table.nents;
+
+	kmem_free(pages, sizeof (*pages) * n);
+	return (0);
+#else
+	return (-1);
+#endif
+}
+
+static void
+abd_alloc_pages_nomerge(abd_t *abd, size_t size)
+{
+	int i, n = abd_chunkcnt_for_bytes(size);
+	struct scatterlist *sg;
+#ifdef _KERNEL
+	struct sg_table table;
+	int ret;
+	gfp_t gfp = kmem_flags_convert(KM_SLEEP);
+
+	while ((ret = sg_alloc_table(&table, n, gfp))) {
+		VERIFY3S(ret, ==, -ENOMEM);
+		schedule_timeout_interruptible(1);
+	}
+
+	ASSERT3U(table.nents, ==, n);
+	ABD_SCATTER(abd).abd_sgl = table.sgl;
+#else
+	ABD_SCATTER(abd).abd_sgl = vmem_alloc(n * sizeof (struct scatterlist),
+	    KM_SLEEP);
+	sg_init_table(ABD_SCATTER(abd).abd_sgl, n);
+#endif
+	ABD_SCATTER(abd).abd_nents = n;
+
+	abd_for_each_sg(abd, sg, n, i) {
+		struct page *p = abd_alloc_chunk();
+		sg_set_page(sg, p, PAGESIZE, 0);
+	}
 }
 
 /*
@@ -299,17 +430,16 @@ abd_free_struct(abd_t *abd)
 abd_t *
 abd_alloc(size_t size, boolean_t is_metadata)
 {
-	int i;
-	size_t n;
 	abd_t *abd;
 
-	if (!zfs_abd_scatter_enabled)
+	if (!zfs_abd_scatter_enabled || size < PAGESIZE)
 		return (abd_alloc_linear(size, is_metadata));
 
 	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);
 
-	n = abd_chunkcnt_for_bytes(size);
-	abd = abd_alloc_struct(n);
+	abd = abd_alloc_struct();
+	if (abd_alloc_pages_merge(abd, size) < 0)
+		abd_alloc_pages_nomerge(abd, size);
 
 	abd->abd_flags = ABD_FLAG_OWNER;
 	if (is_metadata) {
@@ -320,37 +450,48 @@ abd_alloc(size_t size, boolean_t is_metadata)
 	refcount_create(&abd->abd_children);
 
 	abd->abd_u.abd_scatter.abd_offset = 0;
-	abd->abd_u.abd_scatter.abd_chunk_size = PAGESIZE;
-
-	for (i = 0; i < n; i++) {
-		void *c = abd_alloc_chunk();
-		ASSERT3P(c, !=, NULL);
-		abd->abd_u.abd_scatter.abd_chunks[i] = c;
-	}
 
 	ABDSTAT_BUMP(abdstat_scatter_cnt);
 	ABDSTAT_INCR(abdstat_scatter_data_size, size);
 	ABDSTAT_INCR(abdstat_scatter_chunk_waste,
-	    n * PAGESIZE - size);
+	    P2ROUNDUP(size, PAGESIZE) - size);
 
 	return (abd);
 }
 
 static void
+abd_free_pages(abd_t *abd)
+{
+	int i, j, n = ABD_SCATTER(abd).abd_nents;
+	struct scatterlist *sg;
+#ifdef _KERNEL
+	struct sg_table table;
+#endif
+	abd_for_each_sg(abd, sg, n, i) {
+		for (j = 0; j < sg->length; j += PAGESIZE) {
+			struct page *p = nth_page(sg_page(sg), j>>PAGE_SHIFT);
+			abd_free_chunk(p);
+		}
+	}
+#ifdef _KERNEL
+	table.sgl = ABD_SCATTER(abd).abd_sgl;
+	table.nents = table.orig_nents = n;
+	sg_free_table(&table);
+#else
+	vmem_free(ABD_SCATTER(abd).abd_sgl, n * sizeof (struct scatterlist));
+#endif
+}
+
+static void
 abd_free_scatter(abd_t *abd)
 {
-	size_t n = abd_scatter_chunkcnt(abd);
-	int i;
-
-	for (i = 0; i < n; i++) {
-		abd_free_chunk(abd->abd_u.abd_scatter.abd_chunks[i]);
-	}
+	abd_free_pages(abd);
 
 	refcount_destroy(&abd->abd_children);
 	ABDSTAT_BUMPDOWN(abdstat_scatter_cnt);
 	ABDSTAT_INCR(abdstat_scatter_data_size, -(int)abd->abd_size);
 	ABDSTAT_INCR(abdstat_scatter_chunk_waste,
-	    abd->abd_size - n * PAGESIZE);
+	    abd->abd_size - P2ROUNDUP(abd->abd_size, PAGESIZE));
 
 	abd_free_struct(abd);
 }
@@ -363,7 +504,7 @@ abd_free_scatter(abd_t *abd)
 abd_t *
 abd_alloc_linear(size_t size, boolean_t is_metadata)
 {
-	abd_t *abd = abd_alloc_struct(0);
+	abd_t *abd = abd_alloc_struct();
 
 	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);
 
@@ -478,7 +619,7 @@ abd_get_offset_impl(abd_t *sabd, size_t off, size_t size)
 	ASSERT3U(off, <=, sabd->abd_size);
 
 	if (abd_is_linear(sabd)) {
-		abd = abd_alloc_struct(0);
+		abd = abd_alloc_struct();
 
 		/*
 		 * Even if this buf is filesystem metadata, we only track that
@@ -490,11 +631,11 @@ abd_get_offset_impl(abd_t *sabd, size_t off, size_t size)
 		abd->abd_u.abd_linear.abd_buf =
 		    (char *)sabd->abd_u.abd_linear.abd_buf + off;
 	} else {
+		int i;
+		struct scatterlist *sg;
 		size_t new_offset = sabd->abd_u.abd_scatter.abd_offset + off;
-		size_t chunkcnt =  abd_chunkcnt_for_bytes(size +
-		    new_offset % PAGESIZE);
 
-		abd = abd_alloc_struct(chunkcnt);
+		abd = abd_alloc_struct();
 
 		/*
 		 * Even if this buf is filesystem metadata, we only track that
@@ -503,13 +644,15 @@ abd_get_offset_impl(abd_t *sabd, size_t off, size_t size)
 		 */
 		abd->abd_flags = 0;
 
-		abd->abd_u.abd_scatter.abd_offset = new_offset % PAGESIZE;
-		abd->abd_u.abd_scatter.abd_chunk_size = PAGESIZE;
+		abd_for_each_sg(sabd, sg, ABD_SCATTER(sabd).abd_nents, i) {
+			if (new_offset < sg->length)
+				break;
+			new_offset -= sg->length;
+		}
 
-		/* Copy the scatterlist starting at the correct offset */
-		(void) memcpy(&abd->abd_u.abd_scatter.abd_chunks,
-		    &sabd->abd_u.abd_scatter.abd_chunks[new_offset / PAGESIZE],
-		    chunkcnt * sizeof (void *));
+		ABD_SCATTER(abd).abd_sgl = sg;
+		ABD_SCATTER(abd).abd_offset = new_offset;
+		ABD_SCATTER(abd).abd_nents = ABD_SCATTER(sabd).abd_nents - i;
 	}
 
 	abd->abd_size = size;
@@ -545,7 +688,7 @@ abd_get_offset_size(abd_t *sabd, size_t off, size_t size)
 abd_t *
 abd_get_from_buf(void *buf, size_t size)
 {
-	abd_t *abd = abd_alloc_struct(0);
+	abd_t *abd = abd_alloc_struct();
 
 	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);
 
@@ -707,30 +850,20 @@ int km_table[NR_KM_TYPE] = {
 #endif
 
 struct abd_iter {
-	abd_t		*iter_abd;	/* ABD being iterated through */
-	size_t		iter_pos;	/* position (relative to abd_offset) */
+	/* public interface */
 	void		*iter_mapaddr;	/* addr corresponding to iter_pos */
 	size_t		iter_mapsize;	/* length of data valid at mapaddr */
+
+	/* private */
+	abd_t		*iter_abd;	/* ABD being iterated through */
+	size_t		iter_pos;
+	size_t		iter_offset;	/* offset in current sg/abd_buf, */
+					/* abd_offset included */
+	struct scatterlist *iter_sg;	/* current sg */
 #ifndef HAVE_1ARG_KMAP_ATOMIC
 	int		iter_km;	/* KM_* for kmap_atomic */
 #endif
 };
-
-static inline size_t
-abd_iter_scatter_chunk_offset(struct abd_iter *aiter)
-{
-	ASSERT(!abd_is_linear(aiter->iter_abd));
-	return ((aiter->iter_abd->abd_u.abd_scatter.abd_offset +
-	    aiter->iter_pos) % PAGESIZE);
-}
-
-static inline size_t
-abd_iter_scatter_chunk_index(struct abd_iter *aiter)
-{
-	ASSERT(!abd_is_linear(aiter->iter_abd));
-	return ((aiter->iter_abd->abd_u.abd_scatter.abd_offset +
-	    aiter->iter_pos) / PAGESIZE);
-}
 
 /*
  * Initialize the abd_iter.
@@ -740,9 +873,16 @@ abd_iter_init(struct abd_iter *aiter, abd_t *abd, int km_type)
 {
 	abd_verify(abd);
 	aiter->iter_abd = abd;
-	aiter->iter_pos = 0;
 	aiter->iter_mapaddr = NULL;
 	aiter->iter_mapsize = 0;
+	aiter->iter_pos = 0;
+	if (abd_is_linear(abd)) {
+		aiter->iter_offset = 0;
+		aiter->iter_sg = NULL;
+	} else {
+		aiter->iter_offset = ABD_SCATTER(abd).abd_offset;
+		aiter->iter_sg = ABD_SCATTER(abd).abd_sgl;
+	}
 #ifndef HAVE_1ARG_KMAP_ATOMIC
 	ASSERT3U(km_type, <, NR_KM_TYPE);
 	aiter->iter_km = km_type;
@@ -765,6 +905,17 @@ abd_iter_advance(struct abd_iter *aiter, size_t amount)
 		return;
 
 	aiter->iter_pos += amount;
+	aiter->iter_offset += amount;
+	if (!abd_is_linear(aiter->iter_abd)) {
+		while (aiter->iter_offset >= aiter->iter_sg->length) {
+			aiter->iter_offset -= aiter->iter_sg->length;
+			aiter->iter_sg = sg_next(aiter->iter_sg);
+			if (aiter->iter_sg == NULL) {
+				ASSERT0(aiter->iter_offset);
+				break;
+			}
+		}
+	}
 }
 
 /*
@@ -785,19 +936,17 @@ abd_iter_map(struct abd_iter *aiter)
 		return;
 
 	if (abd_is_linear(aiter->iter_abd)) {
-		offset = aiter->iter_pos;
+		ASSERT3U(aiter->iter_pos, ==, aiter->iter_offset);
+		offset = aiter->iter_offset;
 		aiter->iter_mapsize = aiter->iter_abd->abd_size - offset;
 		paddr = aiter->iter_abd->abd_u.abd_linear.abd_buf;
 	} else {
-		size_t index = abd_iter_scatter_chunk_index(aiter);
-		offset = abd_iter_scatter_chunk_offset(aiter);
-
-		aiter->iter_mapsize = MIN(PAGESIZE - offset,
+		offset = aiter->iter_offset;
+		aiter->iter_mapsize = MIN(aiter->iter_sg->length - offset,
 		    aiter->iter_abd->abd_size - aiter->iter_pos);
 
-		paddr = zfs_kmap_atomic(
-			aiter->iter_abd->abd_u.abd_scatter.abd_chunks[index],
-			km_table[aiter->iter_km]);
+		paddr = zfs_kmap_atomic(sg_page(aiter->iter_sg),
+		    km_table[aiter->iter_km]);
 	}
 
 	aiter->iter_mapaddr = (char *)paddr + offset;
@@ -816,8 +965,7 @@ abd_iter_unmap(struct abd_iter *aiter)
 
 	if (!abd_is_linear(aiter->iter_abd)) {
 		/* LINTED E_FUNC_SET_NOT_USED */
-		zfs_kunmap_atomic(aiter->iter_mapaddr -
-		    abd_iter_scatter_chunk_offset(aiter),
+		zfs_kunmap_atomic(aiter->iter_mapaddr - aiter->iter_offset,
 		    km_table[aiter->iter_km]);
 	}
 
@@ -1243,17 +1391,19 @@ abd_scatter_bio_map_off(struct bio *bio, abd_t *abd,
 
 	for (i = 0; i < bio->bi_max_vecs; i++) {
 		struct page *pg;
-		size_t len, pgoff, index;
+		size_t len, sgoff, pgoff;
+		struct scatterlist *sg;
 
 		if (io_size <= 0)
 			break;
 
-		pgoff = abd_iter_scatter_chunk_offset(&aiter);
+		sg = aiter.iter_sg;
+		sgoff = aiter.iter_offset;
+		pgoff = sgoff & (PAGESIZE - 1);
 		len = MIN(io_size, PAGESIZE - pgoff);
 		ASSERT(len > 0);
 
-		index = abd_iter_scatter_chunk_index(&aiter);
-		pg = abd->abd_u.abd_scatter.abd_chunks[index];
+		pg = nth_page(sg_page(sg), sgoff >> PAGE_SHIFT);
 		if (bio_add_page(bio, pg, len, pgoff) != len)
 			break;
 
