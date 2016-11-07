@@ -23,6 +23,7 @@
  */
 
 #include <sys/isa_defs.h>
+#include <sys/types.h>
 
 #if 0 // defined(__aarch64__)
 
