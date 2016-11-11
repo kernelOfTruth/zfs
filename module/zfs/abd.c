@@ -176,30 +176,37 @@ int zfs_abd_scatter_enabled = B_TRUE;
 
 #ifdef _KERNEL
 static kstat_t *abd_ksp;
+static struct address_space *abd_mapping;
 
 static struct page *
 abd_alloc_chunk(void)
 {
-	struct page *c;
-	gfp_t gfp = kmem_flags_convert(KM_SLEEP);
-#ifdef CONFIG_HIGHMEM
-	gfp |= __GFP_HIGHMEM;
-#endif
-	while (!(c = alloc_page(gfp)))
+	struct page *page;
+
+	while ((page = page_cache_alloc(abd_mapping)) == NULL)
 		schedule_timeout_interruptible(1);
-	ASSERT3P(c, !=, NULL);
-	return (c);
+
+	__inc_zone_page_state(page, NR_FILE_PAGES);
+
+	return (page);
 }
 
 static void
-abd_free_chunk(struct page *c)
+abd_free_chunk(struct page *page)
 {
-	__free_page(c);
+	__free_page(page);
+	__dec_zone_page_state(page, NR_FILE_PAGES);
 }
 
 void
 abd_init(void)
 {
+	abd_mapping = kmem_alloc(sizeof (*abd_mapping), KM_SLEEP);
+
+	address_space_init_once(abd_mapping);
+	mapping_set_gfp_mask(abd_mapping, GFP_HIGHUSER);
+	abd_mapping->a_ops = &empty_aops;
+
 	abd_ksp = kstat_create("zfs", 0, "abdstats", "misc", KSTAT_TYPE_NAMED,
 	    sizeof (abd_stats) / sizeof (kstat_named_t), KSTAT_FLAG_VIRTUAL);
 	if (abd_ksp != NULL) {
@@ -215,6 +222,8 @@ abd_fini(void)
 		kstat_delete(abd_ksp);
 		abd_ksp = NULL;
 	}
+
+	kmem_free(abd_mapping, sizeof (*abd_mapping));
 }
 
 #else
@@ -343,58 +352,8 @@ abd_free_struct(abd_t *abd)
 	ABDSTAT_INCR(abdstat_struct_size, -size);
 }
 
-#define	MAX_ALLOC_SIZE (1024*1024)
-
-static int
-abd_alloc_pages_merge(abd_t *abd, size_t size)
-{
-#if defined(_KERNEL) && !defined(CONFIG_HIGHMEM) && defined(HAVE_SG_FROM_PAGES)
-	struct sg_table table;
-	struct page **pages;
-	unsigned long paddr;
-	size_t s;
-	int i, ret, n = abd_chunkcnt_for_bytes(size);
-	gfp_t gfp = kmem_flags_convert(KM_SLEEP);
-
-	pages = kmem_alloc(sizeof (*pages) * n, KM_NOSLEEP);
-	if (!pages)
-		return (-1);
-
-	i = 0;
-	s = size;
-	while (s > 0) {
-		ssize_t len = MIN(s, MAX_ALLOC_SIZE);
-		paddr = (unsigned long)alloc_pages_exact(len,
-		    GFP_NOWAIT|__GFP_NOWARN);
-		if (paddr == 0)
-			break;
-		s -= len;
-		for (; len > 0; len -= PAGESIZE, paddr += PAGESIZE, i++)
-			pages[i] = virt_to_page(paddr);
-	}
-
-	for (; i < n; i++)
-		while (!(pages[i] = alloc_page(gfp)))
-			schedule_timeout_interruptible(1);
-
-	while ((ret = sg_alloc_table_from_pages(&table, pages, n, 0,
-	    size, gfp))) {
-		VERIFY3S(ret, ==, -ENOMEM);
-		schedule_timeout_interruptible(1);
-	}
-
-	ABD_SCATTER(abd).abd_sgl = table.sgl;
-	ABD_SCATTER(abd).abd_nents = table.nents;
-
-	kmem_free(pages, sizeof (*pages) * n);
-	return (0);
-#else
-	return (-1);
-#endif
-}
-
 static void
-abd_alloc_pages_nomerge(abd_t *abd, size_t size)
+abd_alloc_pages(abd_t *abd, size_t size)
 {
 	int i, n = abd_chunkcnt_for_bytes(size);
 	struct scatterlist *sg;
@@ -438,8 +397,7 @@ abd_alloc(size_t size, boolean_t is_metadata)
 	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);
 
 	abd = abd_alloc_struct();
-	if (abd_alloc_pages_merge(abd, size) < 0)
-		abd_alloc_pages_nomerge(abd, size);
+	abd_alloc_pages(abd, size);
 
 	abd->abd_flags = ABD_FLAG_OWNER;
 	if (is_metadata) {
