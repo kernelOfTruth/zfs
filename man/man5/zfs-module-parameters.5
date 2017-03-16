@@ -702,6 +702,24 @@ Default value: \fB5\fR.
 .sp
 .ne 2
 .na
+\fBzfs_arc_pc_frac\fR (uint)
+.ad
+.RS 12n
+n/128 fraction of pagecache to reclaim arc to
+
+This tunable allows ZFS arc to play more nicely with the kernel's LRU
+pagecache. It can guarantee that the arc size won't collapse under scanning
+pressure on the pagecache, yet still allows arc to be reclaimed down to
+zfs_arc_min if necessary. This value is specified as a fraction of pagecache
+size where that fraction may exceed 1. This only operates during memory
+pressure/reclaim.
+.sp
+Default value: \fB0\fR (disabled).
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_arc_sys_free\fR (ulong)
 .ad
 .RS 12n
