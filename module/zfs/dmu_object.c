@@ -82,7 +82,7 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 	if (dnodes_per_chunk > L1_dnode_count)
 		dnodes_per_chunk = L1_dnode_count;
 
-	object = atomic_inc_64_nv(cpuobj);
+	object = *cpuobj;
 	for (;;) {
 		/*
 		 * If we finished a chunk of dnodes, get a new one from
@@ -169,6 +169,7 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 				dmu_tx_add_new_object(tx, dn);
 				dnode_rele(dn, FTAG);
 
+				(void) atomic_swap_64(cpuobj, object + dn_nslots);
 				return (object);
 			}
 			rw_exit(&dn->dn_struct_rwlock);
