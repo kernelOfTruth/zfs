@@ -102,7 +102,7 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 			 * from the beginning at most once per txg. If we
 			 * still can't allocate from that L1 block, search
 			 * for an empty L0 block, which will quickly skip
-			 * to the end of the metadnode if the no nearby L0
+			 * to the end of the metadnode if no nearby L0
 			 * blocks are empty. This fallback avoids a
 			 * pathology where full dnode blocks containing
 			 * large dnodes appear sparse because they have a
