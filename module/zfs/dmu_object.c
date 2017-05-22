@@ -167,7 +167,7 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 				dmu_tx_add_new_object(tx, dn);
 				dnode_rele(dn, FTAG);
 
-				(void) atomic_swap_64(cpuobj, object + dn_nslots);
+				(void) atomic_swap_64(cpuobj, object + dn_slots);
 				return (object);
 			}
 			rw_exit(&dn->dn_struct_rwlock);
