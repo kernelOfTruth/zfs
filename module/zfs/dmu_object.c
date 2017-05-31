@@ -141,8 +141,12 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 					object = offset >> DNODE_SHIFT;
 				}
 			}
-                        os->os_obj_next = object + dnodes_per_chunk;
-                        (void) atomic_swap_64(cpuobj, object);
+			/*
+			 * Note: if "restarted", we may find a L0 that
+			 * is not suitably aligned.
+			 */
+			os->os_obj_next = P2ALIGN(object, dnodes_per_chunk) + dnodes_per_chunk;
+			(void) atomic_swap_64(cpuobj, object);
 			mutex_exit(&os->os_obj_lock);
 		}
 
@@ -174,8 +178,14 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 			dnode_rele(dn, FTAG);
 		}
 
-		if (dmu_object_next(os, &object, B_TRUE, 0) == 0)
-			(void) atomic_swap_64(cpuobj, object);
+		if (dmu_object_next(os, &object, B_TRUE, 0) != 0) {
+			/*
+			 * Skip to next known valid starting point for a
+			 * dnode.
+			 */
+			object = P2ROUNDUP(object + 1, DNODES_PER_BLOCK);
+		}
+		(void) atomic_swap_64(cpuobj, object);
 	}
 }
 
