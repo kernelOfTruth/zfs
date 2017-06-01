@@ -145,7 +145,8 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 			 * Note: if "restarted", we may find a L0 that
 			 * is not suitably aligned.
 			 */
-			os->os_obj_next = P2ALIGN(object, dnodes_per_chunk) + dnodes_per_chunk;
+			os->os_obj_next = P2ALIGN(object, dnodes_per_chunk) +
+			    dnodes_per_chunk;
 			(void) atomic_swap_64(cpuobj, object);
 			mutex_exit(&os->os_obj_lock);
 		}
@@ -171,7 +172,8 @@ dmu_object_alloc_dnsize(objset_t *os, dmu_object_type_t ot, int blocksize,
 				dmu_tx_add_new_object(tx, dn);
 				dnode_rele(dn, FTAG);
 
-				(void) atomic_swap_64(cpuobj, object + dn_slots);
+				(void) atomic_swap_64(cpuobj,
+				    object + dn_slots);
 				return (object);
 			}
 			rw_exit(&dn->dn_struct_rwlock);
